@@ -135,10 +135,10 @@ class RagGenerationService:
     def _insert_to_collection(self, collection_name: str, documents: List[Document]):
         #1. 컬렉션 확인.
         collection_check = self.vector_repository.collection_name_check(collection_name)[0]
-        
+
         print("collection_name => " + collection_name)
         print("collection_check => " + str(collection_check))
-        
+
         #2.이미 있다면 기존 컬렉션을 가져옴.
         if collection_check:
             vector_store = self.vector_repository.existing_vector_store(collection_name)

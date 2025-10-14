@@ -61,21 +61,30 @@ class PGVectorRepositoryImpl(RagRepository):
     
     ##컬렉션 생성 유무 확인.
     def collection_name_check(self, collection_name:str) -> bool:
-        
-        
+
+
         try:
             with self.connection_manager.engine.connect() as conn:
+                # 테이블 존재 여부 확인
+                table_exists = conn.execute(
+                    text("SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'langchain_pg_collection')")
+                ).fetchone()[0]
+
+                # 테이블이 없으면 컬렉션도 없는 것으로 간주
+                if not table_exists:
+                    return [False]
+
                 result = conn.execute(
                     text("SELECT EXISTS (SELECT 1 FROM langchain_pg_collection WHERE name = :name)"),
                     {"name": collection_name}
                 )
                 print(str(result))
-                
+
                 collections = [row[0] for row in result]
                 return collections
-                
+
         except Exception as e:
             print(f"컬렉션 조회 실패: {e}")
-            return []
+            return [False]
         
     
