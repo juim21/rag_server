@@ -122,16 +122,71 @@ class RagGenerationService:
                 else:
                     print(f"❌ {error_type}: {str(e)[:100]}...")
                 
-        
+
         application_docuement_list = self.imageExtractor.create_column_document(result)
-        
+
         #4. 벡터에 넣기.
         self._insert_to_collection(
-            collection_name=collection_name, 
+            collection_name=collection_name,
             documents=application_docuement_list
         )
-    
-    
+
+
+    ##기존에 있는 컬렉션에 텍스트 데이터 임베딩.
+    ##멀티파트 형식으로 텍스트 데이터를 요청했을때 처리.
+    def add_rag_text_data(self, collection_name, formData: FormData):
+
+        #form데이터 정제
+        data_items = []
+
+        service_names = formData.getlist("service_name")
+        screen_names = formData.getlist("screen_name")
+        versions = formData.getlist("version")
+        access_levels = formData.getlist("access_level")
+        text_contents = formData.getlist("text_content")
+
+        for i in range(len(service_names)):
+            data_items.append({
+                "service_name": service_names[i],
+                "screen_name": screen_names[i],
+                "version": versions[i],
+                "access_level": access_levels[i],
+                "text_content": text_contents[i]
+            })
+
+        result = []
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            # 모든 작업을 스레드풀에 제출
+            futures = [
+                executor.submit(self._response_llm_text_data, data_item)
+                for data_item in data_items
+            ]
+        # 완료된 순서대로 결과 수집
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                temp_result = future.result()
+                result.append(temp_result)
+            except Exception as e:
+                error_type = type(e).__name__
+                if "OpenAI" in error_type or "API" in str(e):
+                    print(f"❌ API 에러: {str(e)[:150]}...")
+                elif "JSON" in str(e):
+                    print(f"❌ JSON 파싱 에러: {str(e)[:100]}...")
+                elif "timeout" in str(e).lower():
+                    print(f"❌ 타임아웃 에러")
+                else:
+                    print(f"❌ {error_type}: {str(e)[:100]}...")
+
+        application_docuement_list = self.imageExtractor.create_column_document(result)
+
+        #4. 벡터에 넣기.
+        self._insert_to_collection(
+            collection_name=collection_name,
+            documents=application_docuement_list
+        )
+
+
     def _insert_to_collection(self, collection_name: str, documents: List[Document]):
         #1. 컬렉션 확인.
         collection_check = self.vector_repository.collection_name_check(collection_name)[0]
@@ -296,9 +351,39 @@ class RagGenerationService:
                 }
             }
         ]
-        
+
         response = self._delete_code_block(
             self.llm_client.llm_request(formatted_messages)
         )
-        
+
+        return json.loads(response)
+
+    ## 텍스트로 넣을때 사용하는 메서드
+    def _response_llm_text_data(self, data_item: Dict[str,str]) -> Dict[str,str]:
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system" , app_analysis_prompt_system),
+            ("user" , app_analysis_prompt_user)
+        ])
+
+        formatted_messages = prompt.format_messages(
+            service_name = data_item['service_name'],
+            screen_name = data_item['screen_name'],
+            version = data_item['version'],
+            access_level = data_item['access_level'],
+        )
+
+        user_message = formatted_messages[-1]
+        # 텍스트만 추가 (이미지 URL 제외)
+        user_message.content = [
+            {
+                "type" : "text",
+                "text" : user_message.content + "\n\n[화면 설명]\n" + data_item['text_content']
+            }
+        ]
+
+        response = self._delete_code_block(
+            self.llm_client.llm_request(formatted_messages)
+        )
+
         return json.loads(response)

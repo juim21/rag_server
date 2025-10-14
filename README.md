@@ -91,7 +91,22 @@ app/
 
 ## 📡 API 엔드포인트
 
-### 1. RAG 벡터 데이터 추가
+### 1. RAG 벡터 데이터 생성 (이미지 기반)
+```http
+POST /api/rag/generation/vector
+Content-Type: application/json
+
+Body:
+{
+    "collection_name": "test_collection"
+}
+
+설명:
+- ./test_images 디렉토리의 이미지를 일괄 분석하여 벡터 저장
+- 개발/테스트용 엔드포인트
+```
+
+### 2. RAG 벡터 데이터 추가 (이미지)
 ```http
 POST /api/rag/add/vector
 Content-Type: multipart/form-data
@@ -103,14 +118,32 @@ Parameters:
 - version: string[] (버전 배열)
 - access_level: string[] (접근 레벨 배열)
 - images: file[] (이미지 파일 배열)
+
+설명:
+- 기존 컬렉션에 새로운 이미지 기반 데이터 추가
+- 컬렉션이 없으면 자동 생성
 ```
 
-### 2. 벡터 생성 (개발용)
+### 3. RAG 벡터 데이터 추가 (텍스트)
 ```http
-GET /api/rag/generation/vector?collection_name=test_collection
+POST /api/rag/add/text
+Content-Type: multipart/form-data
+
+Parameters:
+- collection_name: string (컬렉션 이름)
+- service_name: string[] (서비스명 배열)
+- screen_name: string[] (화면명 배열)
+- version: string[] (버전 배열)
+- access_level: string[] (접근 레벨 배열)
+- text_content: string[] (화면 설명 텍스트 배열)
+
+설명:
+- 기존 컬렉션에 텍스트 기반 화면 설명 추가
+- 이미지 없이 텍스트 설명만으로 RAG 데이터 생성
+- 컬렉션이 없으면 자동 생성
 ```
 
-### 3. 헬스 체크
+### 4. 헬스 체크
 ```http
 GET /api/rag/health
 ```
