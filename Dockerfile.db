@@ -1,0 +1,34 @@
+FROM postgres:16
+
+# pgvector 확장 설치 (Debian 기반)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        git \
+        postgresql-server-dev-16 \
+        ca-certificates \
+    && cd /tmp \
+    && git clone --branch v0.7.0 https://github.com/pgvector/pgvector.git \
+    && cd pgvector \
+    && make \
+    && make install \
+    && cd / \
+    && rm -rf /tmp/pgvector \
+    && apt-get remove -y build-essential git postgresql-server-dev-16 \
+    && apt-get autoremove -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# 초기화 스크립트 복사
+COPY ./init-db.sh /docker-entrypoint-initdb.d/
+
+# 권한 설정
+RUN chmod +x /docker-entrypoint-initdb.d/init-db.sh
+
+# 환경변수 설정
+ENV POSTGRES_DB=postgres
+ENV POSTGRES_USER=postgres
+ENV POSTGRES_PASSWORD=postgres
+
+# 포트 노출
+EXPOSE 5432

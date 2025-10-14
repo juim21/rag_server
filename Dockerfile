@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 # 작업 디렉토리 설정
-WORKDIR /text-to-sql
+WORKDIR /testcase-doc-rag
 
 # requirements 복사 및 설치
 COPY requirements.txt .
@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY ./app /testcase/app
 
 # 환경변수 설정
-ENV PYTHONPATH=/text-to-sql
+ENV PYTHONPATH=/testcase-doc-rag
 
 # 포트 노출
 EXPOSE 8000

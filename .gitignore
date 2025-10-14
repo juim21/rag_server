@@ -4,3 +4,5 @@ testcase_rag/
 
 .env
 
+
+.DS_Store

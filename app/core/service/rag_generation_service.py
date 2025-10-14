@@ -61,6 +61,8 @@ class RagGenerationService:
 
         #3. Document로 변환.
         application_docuement_list = self.imageExtractor.create_column_document(result)
+        print(application_docuement_list)
+        print("test => " + collection_name)
         
         #4. 벡터에 넣기.
         self._insert_to_collection(
@@ -134,6 +136,9 @@ class RagGenerationService:
         #1. 컬렉션 확인.
         collection_check = self.vector_repository.collection_name_check(collection_name)[0]
         
+        print("collection_name => " + collection_name)
+        print("collection_check => " + str(collection_check))
+        
         #2.이미 있다면 기존 컬렉션을 가져옴.
         if collection_check:
             vector_store = self.vector_repository.existing_vector_store(collection_name)
@@ -141,7 +146,7 @@ class RagGenerationService:
             
         #3. 없다면 생성하고 vector디비에 넣기. 
         else:
-            
+            print("teadsfasdfa")
             self.vector_repository.build_vector_storage(
                 collection_name = collection_name, 
                 documents = documents

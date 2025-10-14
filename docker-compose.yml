@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with pgvector
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.db
+    container_name: backend_ai_postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend_network
+
+  # FastAPI Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: backend_ai_app
+    environment:
+      # OpenAI API Key
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+
+      # Main DB
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: biz_table
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+
+      # Vector DB
+      VECTOR_DB_HOST: postgres
+      VECTOR_DB_PORT: 5432
+      VECTOR_DB_NAME: biz_rag
+      VECTOR_DB_USER: postgres
+      VECTOR_DB_PASSWORD: postgres
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./app:/testcase-doc-rag/app
+    networks:
+      - backend_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  backend_network:
+    driver: bridge

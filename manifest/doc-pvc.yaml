@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-doc-rag-pvc
+  namespace: leesh-doc-create
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  selector:
+    matchLabels:
+      pv-name: postgres-doc-rag-pv #지정한 pv만 선택
+  storageClassName: ""
