@@ -15,12 +15,12 @@ import base64
 class RagGenerationService:
 
     def __init__(self):
-        from app.infra.external.embedding.openai_embedding_client import OpenAIEmbeddingClient
+        from app.infra.external.embedding.google_embedding_client import GoogleEmbeddingClient
 
         self.imageExtractor = ImageExtractor()
         self.vector_repository = DIContainer.get(RagRepository)
         self.llm_client = DIContainer.get(LlmClient)
-        self.embedding_client = OpenAIEmbeddingClient()  # 이슈 #3: DI 주입 방식으로 한 번만 생성
+        self.embedding_client = GoogleEmbeddingClient()  # DI 주입 방식으로 한 번만 생성
 
     #대량의 데이터를 업로드 하는 방식 - 특정 디렉토리에 파일을 일괄로 저장 및 파일별 입력 데이터를 일괄로 업로드
     def generation_rag(self, collection_name : str):

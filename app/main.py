@@ -25,12 +25,12 @@ def setup_dependencies():
     from app.core.service.rag_generation_service import RagGenerationService
     from app.core.interface import RagRepository
     from app.core.interface.llm_client import LlmClient
-    from app.infra.external.llm.openai_client import OpenAIChatClient
+    from app.infra.external.llm.google_client import GoogleChatClient
     from app.di_container import DIContainer
-    
-    
+
+
     DIContainer.register(RagRepository, AgeRepositoryImpl())
-    DIContainer.register(LlmClient, OpenAIChatClient())
+    DIContainer.register(LlmClient, GoogleChatClient())
     DIContainer.register(RagGenerationService, RagGenerationService())
     
     

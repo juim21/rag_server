@@ -8,9 +8,13 @@ langchain-openai==0.1.23
 langchain-community==0.2.16
 langchain-core==0.2.38
 langchain-text-splitters==0.2.4
+langchain-google-genai==1.0.10
 
 # OpenAI
 openai==1.45.0
+
+# Google AI
+google-generativeai==0.7.2
 
 # 데이터 처리
 pandas==2.2.2
