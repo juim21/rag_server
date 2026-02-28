@@ -1,1 +1,1 @@
-from .pgvector_repository_impl import PGVectorRepositoryImpl
+from .age_repository_impl import AgeRepositoryImpl

@@ -1,7 +1,7 @@
 from app.core.service.rag_generation_service import RagGenerationService
 from app.di_container import DIContainer
-from app.api.model.response import RAGResponse
-from app.api.model.request.rag_request import RAGRequest
+from app.api.model.response import RAGResponse, RAGSearchResponse
+from app.api.model.request.rag_request import RAGRequest, RAGSearchRequest
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from fastapi import Form, UploadFile, File, Request
@@ -55,6 +55,27 @@ async def add_rag_text(request: Request) -> JSONResponse:
     return JSONResponse(content={
             "result" : "ok"
         })
+
+@router.post("/search", response_model=RAGSearchResponse)
+def search_rag(request: RAGSearchRequest) -> JSONResponse:
+    ragGenService = DIContainer.get(RagGenerationService)
+
+    results = ragGenService.search_rag(
+        collection_name=request.collection_name,
+        query=request.query,
+        k=request.k
+    )
+
+    return JSONResponse(content={
+        "results": [
+            {
+                "content": doc["page_content"],
+                "metadata": doc["metadata"],
+                "score": round(score, 4)
+            }
+            for doc, score in results
+        ]
+    })
 
 @router.get("/health")
 async def health_check():

@@ -21,7 +21,7 @@ app = FastAPI(title="RAG SQL API", version="1.0.0",lifespan=lifespan)
 
 
 def setup_dependencies():
-    from app.infra.repository import PGVectorRepositoryImpl
+    from app.infra.repository.age_repository_impl import AgeRepositoryImpl
     from app.core.service.rag_generation_service import RagGenerationService
     from app.core.interface import RagRepository
     from app.core.interface.llm_client import LlmClient
@@ -29,7 +29,7 @@ def setup_dependencies():
     from app.di_container import DIContainer
     
     
-    DIContainer.register(RagRepository, PGVectorRepositoryImpl())
+    DIContainer.register(RagRepository, AgeRepositoryImpl())
     DIContainer.register(LlmClient, OpenAIChatClient())
     DIContainer.register(RagGenerationService, RagGenerationService())
     

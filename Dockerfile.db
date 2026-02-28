@@ -1,15 +1,11 @@
-FROM pgvector/pgvector:pg16
+FROM postgres:16
 
-# 초기화 스크립트 복사
-COPY ./init-db.sh /docker-entrypoint-initdb.d/
+# Install build dependencies for AGE and pgvector
+RUN apt-get update && apt-get install -y --no-install-recommends     build-essential     libpq-dev     postgresql-server-dev-16     git     flex     bison     postgresql-16-pgvector     ca-certificates &&     rm -rf /var/lib/apt/lists/*
 
-# 권한 설정
-RUN chmod +x /docker-entrypoint-initdb.d/init-db.sh
+# Clone, build, and install Apache AGE
+# See https://age.apache.org/age-manual/master/intro/setup.html for reference
+RUN git clone --branch PG16 https://github.com/apache/age.git /age_source &&     cd /age_source &&     make PG_CONFIG=/usr/bin/pg_config install
 
-# 환경변수 설정
-ENV POSTGRES_DB=postgres
-ENV POSTGRES_USER=postgres
-ENV POSTGRES_PASSWORD=postgres
-
-# 포트 노출
-EXPOSE 5432
+# Clean up source
+RUN rm -rf /age_source

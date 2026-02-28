@@ -1,13 +1,11 @@
-# Core PostgreSQL and Vector DB
+# Core PostgreSQL
 psycopg2-binary==2.9.9
 psycopg[binary]==3.1.12
-pgvector==0.2.5
 
 # LangChain 관련 (기존 버전 유지)
 langchain==0.2.16
 langchain-openai==0.1.23
 langchain-community==0.2.16
-langchain-postgres==0.0.12
 langchain-core==0.2.38
 langchain-text-splitters==0.2.4
 
