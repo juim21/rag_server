@@ -33,6 +33,8 @@ services:
     environment:
       # OpenAI API Key
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # Google API Key
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
 
       # Main DB
       DB_HOST: postgres

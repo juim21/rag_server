@@ -20,7 +20,7 @@ class GoogleEmbeddingClient:
 
         GoogleEmbeddingClient._embeddings = GoogleGenerativeAIEmbeddings(
             google_api_key=google_api_key,
-            model="models/text-embedding-004"
+            model="models/gemini-embedding-001"
         )
 
     @property

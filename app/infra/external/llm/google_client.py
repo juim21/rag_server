@@ -21,7 +21,7 @@ class GoogleChatClient(LlmClient):
 
         GoogleChatClient._llm = ChatGoogleGenerativeAI(
             google_api_key=google_api_key,
-            model="gemini-2.0-flash",
+            model="gemini-2.0-flash-lite",
             temperature=0
         )
 
