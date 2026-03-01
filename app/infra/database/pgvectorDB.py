@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import QueuePool
@@ -15,8 +16,6 @@ class PGVectorManager:
     def __init__(self):
         if PGVectorManager._engine is None:
             self._initialize_connection_pool()
-        self.conn = None
-        self.cursor = None
 
     def _initialize_connection_pool(self):
         PGVectorManager._connection_string = (
@@ -33,19 +32,21 @@ class PGVectorManager:
         )
         PGVectorManager._session_factory = sessionmaker(bind=PGVectorManager._engine)
 
+    @contextmanager
     def get_cursor(self):
-        """새로운 커서를 반환합니다."""
-        self.conn = PGVectorManager._engine.connect()
-        # psycopg2 커서를 사용하기 위해 raw_connection을 사용합니다.
-        self.cursor = self.conn.connection.cursor()
-        return self.cursor
-
-    def close_connection(self):
-        """현재 커서와 연결을 닫습니다."""
-        if self.cursor:
-            self.cursor.close()
-        if self.conn:
-            self.conn.close()
+        """커넥션 풀에서 커넥션을 체크아웃하고 커서를 반환하는 컨텍스트 매니저.
+        블록 종료 시 자동으로 커밋/롤백 후 커넥션을 반납합니다."""
+        conn = PGVectorManager._engine.connect()
+        cursor = conn.connection.cursor()
+        try:
+            yield cursor
+            conn.connection.commit()
+        except Exception:
+            conn.connection.rollback()
+            raise
+        finally:
+            cursor.close()
+            conn.close()
 
     @property
     def engine(self):
