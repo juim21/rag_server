@@ -80,12 +80,12 @@ class AgeRepositoryImpl(RagRepository):
                 embedding=embedding
             )
 
-    def similarity_search(self, collection_name: str, query_embedding: List[float], k: int = 5) -> List[Tuple[Dict[str, Any], float]]:
+    def similarity_search(self, collection_name: str, query_embedding: List[float], k: int = 5, filters: dict = None) -> List[Tuple[Dict[str, Any], float]]:
         """
         pgvector의 코사인 유사도 연산자(<=>)를 사용하여 DB 레벨에서 ANN 검색을 수행합니다.
-        Python 루프 방식 대비 대용량 데이터에서 월등히 빠릅니다.
+        filters로 메타데이터 필드 조건을 추가할 수 있습니다 (JSONB @> 연산).
         """
-        rows = self.connection_manager.search_similar(collection_name, query_embedding, k)
+        rows = self.connection_manager.search_similar(collection_name, query_embedding, k, filters)
         return [
             ({"page_content": row["content"], "metadata": row["metadata"]}, row["score"])
             for row in rows

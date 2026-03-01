@@ -63,7 +63,8 @@ def search_rag(request: RAGSearchRequest) -> JSONResponse:
     results = ragGenService.search_rag(
         collection_name=request.collection_name,
         query=request.query,
-        k=request.k
+        k=request.k,
+        filters=request.filters
     )
 
     return JSONResponse(content={

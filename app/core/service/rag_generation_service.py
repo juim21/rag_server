@@ -184,9 +184,9 @@ class RagGenerationService:
             documents=application_docuement_list
         )
 
-    def search_rag(self, collection_name: str, query: str, k: int = 5):
-        query_embedding = self.embedding_client.embeddings.embed_query(query)  # 이슈 #3: self.embedding_client 사용
-        return self.vector_repository.similarity_search(collection_name, query_embedding, k)
+    def search_rag(self, collection_name: str, query: str, k: int = 5, filters: dict = None):
+        query_embedding = self.embedding_client.embeddings.embed_query(query)
+        return self.vector_repository.similarity_search(collection_name, query_embedding, k, filters)
 
     def _insert_to_collection(self, collection_name: str, documents: List[Document]):
         print("collection_name => " + collection_name)

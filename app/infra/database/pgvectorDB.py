@@ -63,20 +63,31 @@ class PGVectorManager:
                 (collection_name, content, json.dumps(metadata), embedding)
             )
 
-    def search_similar(self, collection_name: str, query_embedding: list, k: int = 5) -> list:
-        """pgvector 코사인 유사도 검색. 상위 k개를 (content, metadata, score) 형태로 반환합니다."""
+    def search_similar(self, collection_name: str, query_embedding: list, k: int = 5, filters: dict = None) -> list:
+        """pgvector 코사인 유사도 검색. 상위 k개를 (content, metadata, score) 형태로 반환합니다.
+        filters: JSONB 포함 조건 (예: {"service_name": "my_service", "access_level": "user"})
+        """
         import json
+        conditions = ["collection_name = %s"]
+        params = [collection_name]
+
+        if filters:
+            # JSONB @> 연산자: metadata가 filters를 포함하는 행만 선택
+            conditions.append("metadata @> %s::jsonb")
+            params.append(json.dumps(filters))
+
+        where_clause = " AND ".join(conditions)
+        params_with_vec = [query_embedding] + params + [query_embedding, k]
+
+        sql = f"""
+            SELECT content, metadata, 1 - (embedding <=> %s::vector) AS score
+            FROM rag_embeddings
+            WHERE {where_clause}
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+        """
         with self.get_cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT content, metadata, 1 - (embedding <=> %s::vector) AS score
-                FROM rag_embeddings
-                WHERE collection_name = %s
-                ORDER BY embedding <=> %s::vector
-                LIMIT %s
-                """,
-                (query_embedding, collection_name, query_embedding, k)
-            )
+            cursor.execute(sql, params_with_vec)
             rows = cursor.fetchall()
         return [
             {"content": row[0], "metadata": row[1] if isinstance(row[1], dict) else json.loads(row[1]), "score": float(row[2])}
