@@ -9,8 +9,14 @@ class RagRepository(ABC):
         pass
 
     @abstractmethod
-    def similarity_search(self, collection_name: str, query_embedding: List[float], k: int = 5, filters: Optional[Dict[str, Any]] = None) -> List[Tuple[Dict[str, Any], float]]:
-        """임베딩과 유사한 문서를 검색합니다. filters는 메타데이터 필드 조건입니다."""
+    def similarity_search(self, collection_name: str, query_embedding: List[float], k: int = 5,
+                          filters: Optional[Dict[str, Any]] = None,
+                          search_mode: str = "vector", query_text: Optional[str] = None) -> List[Tuple[Dict[str, Any], float]]:
+        """임베딩과 유사한 문서를 검색합니다.
+        filters: 메타데이터 필드 조건
+        search_mode: 'vector'(기본) | 'hybrid'(벡터+BM25 RRF)
+        query_text: hybrid 모드에서 BM25 키워드 검색에 사용할 원본 쿼리
+        """
         pass
 
     @abstractmethod

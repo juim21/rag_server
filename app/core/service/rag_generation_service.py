@@ -184,9 +184,13 @@ class RagGenerationService:
             documents=application_docuement_list
         )
 
-    def search_rag(self, collection_name: str, query: str, k: int = 5, filters: dict = None):
+    def search_rag(self, collection_name: str, query: str, k: int = 5, filters: dict = None, search_mode: str = "vector"):
         query_embedding = self.embedding_client.embeddings.embed_query(query)
-        return self.vector_repository.similarity_search(collection_name, query_embedding, k, filters)
+        return self.vector_repository.similarity_search(
+            collection_name, query_embedding, k, filters,
+            search_mode=search_mode,
+            query_text=query if search_mode == "hybrid" else None
+        )
 
     def analyze_code_impact(self, collection_name: str, code: str, k: int = 5, filters: dict = None) -> dict:
         """

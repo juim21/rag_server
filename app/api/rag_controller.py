@@ -65,7 +65,8 @@ def search_rag(request: RAGSearchRequest) -> JSONResponse:
         collection_name=request.collection_name,
         query=request.query,
         k=request.k,
-        filters=request.filters
+        filters=request.filters,
+        search_mode=request.search_mode
     )
 
     return JSONResponse(content={

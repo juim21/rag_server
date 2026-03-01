@@ -80,12 +80,13 @@ class AgeRepositoryImpl(RagRepository):
                 embedding=embedding
             )
 
-    def similarity_search(self, collection_name: str, query_embedding: List[float], k: int = 5, filters: dict = None) -> List[Tuple[Dict[str, Any], float]]:
+    def similarity_search(self, collection_name: str, query_embedding: List[float], k: int = 5,
+                          filters: dict = None, search_mode: str = "vector", query_text: str = None) -> List[Tuple[Dict[str, Any], float]]:
         """
-        pgvector의 코사인 유사도 연산자(<=>)를 사용하여 DB 레벨에서 ANN 검색을 수행합니다.
-        filters로 메타데이터 필드 조건을 추가할 수 있습니다 (JSONB @> 연산).
+        pgvector 코사인 유사도 검색 또는 하이브리드 검색(RRF)을 수행합니다.
+        search_mode='hybrid' + query_text 전달 시 벡터+BM25 RRF 결합 결과를 반환합니다.
         """
-        rows = self.connection_manager.search_similar(collection_name, query_embedding, k, filters)
+        rows = self.connection_manager.search_similar(collection_name, query_embedding, k, filters, search_mode, query_text)
         return [
             ({"page_content": row["content"], "metadata": row["metadata"]}, row["score"])
             for row in rows

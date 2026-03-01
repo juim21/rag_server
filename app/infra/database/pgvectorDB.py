@@ -43,41 +43,64 @@ class PGVectorManager:
                     collection_name TEXT NOT NULL,
                     content TEXT NOT NULL,
                     metadata JSONB,
-                    embedding vector({self.EMBEDDING_DIM})
+                    embedding vector({self.EMBEDDING_DIM}),
+                    content_tsv TSVECTOR
                 );
             """)
+            # collection_name 필터 인덱스
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS rag_embeddings_collection_idx
                 ON rag_embeddings (collection_name);
             """)
+            # 기존 테이블에 content_tsv 컬럼이 없을 경우 추가 (인덱스 생성 전에 실행)
+            cursor.execute("""
+                ALTER TABLE rag_embeddings
+                ADD COLUMN IF NOT EXISTS content_tsv TSVECTOR;
+            """)
+            # 전문 검색용 GIN 인덱스 (하이브리드 검색)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS rag_embeddings_tsv_idx
+                ON rag_embeddings USING GIN (content_tsv);
+            """)
             # 주의: pgvector의 ivfflat/hnsw 인덱스는 최대 2000차원까지만 지원
             # gemini-embedding-001은 3072차원이므로 인덱스 없이 순차 검색(exact NN) 사용
-            # 향후 차원 축소(output_dimensionality) 적용 시 인덱스 추가 가능
 
     def insert_embedding(self, collection_name: str, content: str, metadata: dict, embedding: list):
-        """pgvector 테이블에 임베딩과 콘텐츠를 삽입합니다."""
+        """pgvector 테이블에 임베딩과 콘텐츠를 삽입합니다. content_tsv도 자동 생성합니다."""
         import json
         with self.get_cursor() as cursor:
             cursor.execute(
-                "INSERT INTO rag_embeddings (collection_name, content, metadata, embedding) VALUES (%s, %s, %s, %s)",
-                (collection_name, content, json.dumps(metadata), embedding)
+                """INSERT INTO rag_embeddings (collection_name, content, metadata, embedding, content_tsv)
+                   VALUES (%s, %s, %s, %s, to_tsvector('simple', %s))""",
+                (collection_name, content, json.dumps(metadata), embedding, content)
             )
 
-    def search_similar(self, collection_name: str, query_embedding: list, k: int = 5, filters: dict = None) -> list:
-        """pgvector 코사인 유사도 검색. 상위 k개를 (content, metadata, score) 형태로 반환합니다.
-        filters: JSONB 포함 조건 (예: {"service_name": "my_service", "access_level": "user"})
-        """
+    def _build_filter_clause(self, filters: dict) -> tuple:
+        """filters dict를 WHERE 절 조건과 파라미터 리스트로 변환합니다."""
         import json
-        conditions = ["collection_name = %s"]
-        params = [collection_name]
-
+        conditions = []
+        params = []
         if filters:
-            # JSONB @> 연산자: metadata가 filters를 포함하는 행만 선택
             conditions.append("metadata @> %s::jsonb")
             params.append(json.dumps(filters))
+        return conditions, params
 
+    def search_similar(self, collection_name: str, query_embedding: list, k: int = 5,
+                       filters: dict = None, search_mode: str = "vector", query_text: str = None) -> list:
+        """벡터 유사도 검색 또는 하이브리드 검색(RRF)을 수행합니다.
+        search_mode: 'vector' (기본) | 'hybrid' (벡터 + BM25 키워드, RRF 결합)
+        """
+        if search_mode == "hybrid" and query_text:
+            return self._hybrid_search(collection_name, query_embedding, query_text, k, filters)
+        return self._vector_search(collection_name, query_embedding, k, filters)
+
+    def _vector_search(self, collection_name: str, query_embedding: list, k: int, filters: dict) -> list:
+        """pgvector 코사인 유사도 순수 벡터 검색."""
+        import json
+        filter_conditions, filter_params = self._build_filter_clause(filters)
+        conditions = ["collection_name = %s"] + filter_conditions
         where_clause = " AND ".join(conditions)
-        params_with_vec = [query_embedding] + params + [query_embedding, k]
+        params = [query_embedding, collection_name] + filter_params + [query_embedding, k]
 
         sql = f"""
             SELECT content, metadata, 1 - (embedding <=> %s::vector) AS score
@@ -87,10 +110,62 @@ class PGVectorManager:
             LIMIT %s
         """
         with self.get_cursor() as cursor:
-            cursor.execute(sql, params_with_vec)
+            cursor.execute(sql, params)
             rows = cursor.fetchall()
         return [
             {"content": row[0], "metadata": row[1] if isinstance(row[1], dict) else json.loads(row[1]), "score": float(row[2])}
+            for row in rows
+        ]
+
+    def _hybrid_search(self, collection_name: str, query_embedding: list, query_text: str, k: int, filters: dict) -> list:
+        """벡터 검색 + BM25 키워드 검색 결과를 RRF(Reciprocal Rank Fusion)로 결합합니다."""
+        import json
+        filter_conditions, filter_params = self._build_filter_clause(filters)
+        base_conditions = ["collection_name = %s"] + filter_conditions
+        where_clause = " AND ".join(base_conditions)
+
+        candidate_k = k * 3  # 각 검색에서 충분한 후보 확보
+        base_params = [collection_name] + filter_params
+
+        sql = f"""
+            WITH vector_ranks AS (
+                SELECT id, content, metadata,
+                       ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector) AS rank
+                FROM rag_embeddings
+                WHERE {where_clause}
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+            ),
+            keyword_ranks AS (
+                SELECT id, content, metadata,
+                       ROW_NUMBER() OVER (ORDER BY ts_rank(content_tsv, plainto_tsquery('simple', %s)) DESC) AS rank
+                FROM rag_embeddings
+                WHERE {where_clause}
+                AND content_tsv @@ plainto_tsquery('simple', %s)
+                ORDER BY ts_rank(content_tsv, plainto_tsquery('simple', %s)) DESC
+                LIMIT %s
+            )
+            SELECT
+                COALESCE(v.id, k.id) AS id,
+                COALESCE(v.content, k.content) AS content,
+                COALESCE(v.metadata, k.metadata) AS metadata,
+                COALESCE(1.0 / (60 + v.rank), 0.0) + COALESCE(1.0 / (60 + k.rank), 0.0) AS rrf_score
+            FROM vector_ranks v
+            FULL OUTER JOIN keyword_ranks k ON v.id = k.id
+            ORDER BY rrf_score DESC
+            LIMIT %s
+        """
+        params = (
+            [query_embedding] + base_params + [query_embedding, candidate_k] +  # vector_ranks
+            [query_text] + base_params + [query_text, query_text, candidate_k] +  # keyword_ranks
+            [k]
+        )
+
+        with self.get_cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+        return [
+            {"content": row[1], "metadata": row[2] if isinstance(row[2], dict) else json.loads(row[2]), "score": float(row[3])}
             for row in rows
         ]
 
