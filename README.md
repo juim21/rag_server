@@ -2,7 +2,7 @@
 
 ## 서비스 개요
 
-애플리케이션 화면 이미지(또는 텍스트 설명)를 GPT-4o Vision으로 분석하고, 분석 결과를 벡터 임베딩으로 변환하여 **Apache AGE(그래프 DB)** 에 저장하는 RAG(Retrieval-Augmented Generation) 구축 서비스입니다.
+애플리케이션 화면 이미지(또는 텍스트 설명)를 **Gemini 2.5 Flash Vision**으로 분석하고, 분석 결과를 벡터 임베딩으로 변환하여 **Apache AGE(그래프 DB)** 에 저장하는 RAG(Retrieval-Augmented Generation) 구축 서비스입니다.
 
 소스코드 변경 시 영향받는 화면을 빠르게 검색할 수 있는 기반 데이터를 구축하고, 테스트 케이스 자동 생성을 위한 RAG 시스템을 제공합니다.
 
@@ -28,13 +28,13 @@ FastAPI (rag_controller)
   ├─► RagGenerationService
   │       │
   │       ├─► ImageExtractor            (이미지 → base64 변환, Document 생성)
-  │       ├─► OpenAIChatClient          (GPT-4o Vision 이미지 분석)
-  │       ├─► OpenAIEmbeddingClient     (text-embedding-3-small 임베딩)
+  │       ├─► GoogleChatClient          (Gemini 2.5 Flash Vision 이미지 분석)
+  │       ├─► GoogleEmbeddingClient     (gemini-embedding-001 임베딩)
   │       └─► RagRepository            (Apache AGE 저장/검색)
   │               │
   │               └─► PGVectorManager  (PostgreSQL 연결풀, psycopg3)
   │
-  └─► OpenAI API (GPT-4o, text-embedding-3-small)
+  └─► Google AI API (Gemini 2.5 Flash, gemini-embedding-001)
 ```
 
 ### 레이어 구조 (Clean Architecture)
@@ -57,7 +57,7 @@ FastAPI (rag_controller)
 | Backend | FastAPI 0.115, Python 3.11, Uvicorn |
 | Graph DB | PostgreSQL + Apache AGE 1.6.0 (Cypher 쿼리) |
 | Vector | PostgreSQL + pgvector 0.8.1 (임베딩 저장) |
-| AI/ML | OpenAI GPT-4o (Vision), text-embedding-3-small |
+| AI/ML | Google Gemini 2.5 Flash (Vision), gemini-embedding-001 |
 | Framework | LangChain 0.2 |
 | ORM | SQLAlchemy 2.0, psycopg3 |
 | 컨테이너 | Docker, Docker Compose |
@@ -88,8 +88,8 @@ rag_server/
 │   │   ├── repository/
 │   │   │   └── age_repository_impl.py   # Apache AGE 그래프 저장소 구현체
 │   │   └── external/
-│   │       ├── llm/openai_client.py          # OpenAI GPT-4o 클라이언트
-│   │       └── embedding/openai_embedding_client.py  # OpenAI 임베딩 클라이언트
+│   │       ├── llm/google_client.py           # Google Gemini 2.5 Flash 클라이언트
+│   │       └── embedding/google_embedding_client.py  # Google 임베딩 클라이언트
 │   └── config/
 │       ├── database_config.py           # DB 접속 환경변수 로드
 │       └── prompt.py                    # 이미지 분석용 시스템/유저 프롬프트
@@ -262,7 +262,7 @@ cp .env.example .env
 
 | 변수 | 설명 | 기본값 |
 |------|------|--------|
-| `OPENAI_API_KEY` | OpenAI API 키 | (필수) |
+| `GOOGLE_API_KEY` | Google AI API 키 | (필수) |
 | `VECTOR_DB_HOST` | PostgreSQL 호스트 | `postgres` |
 | `VECTOR_DB_PORT` | 포트 | `5432` |
 | `VECTOR_DB_NAME` | 데이터베이스명 | `biz_rag` |
@@ -278,7 +278,7 @@ cp .env.example .env
 ```bash
 # 1. 환경변수 설정
 cp .env.example .env
-# .env 파일에서 OPENAI_API_KEY 입력
+# .env 파일에서 GOOGLE_API_KEY 입력
 
 # 2. 전체 스택 실행 (PostgreSQL + FastAPI)
 docker-compose up -d
@@ -328,7 +328,7 @@ docker exec backend_ai_postgres psql -U postgres -d biz_table -c "CREATE EXTENSI
 ```python
 # main.py lifespan에서 등록
 DIContainer.register(RagRepository, AgeRepositoryImpl())
-DIContainer.register(LlmClient, OpenAIChatClient())
+DIContainer.register(LlmClient, GoogleChatClient())
 DIContainer.register(RagGenerationService, RagGenerationService())
 
 # 서비스/컨트롤러에서 사용
@@ -341,9 +341,55 @@ service = DIContainer.get(RagGenerationService)
 
 - **그래프 저장**: Apache AGE Cypher 쿼리로 `Screen` 노드와 `Service` 노드를 생성하고 `BELONGS_TO` 관계로 연결
 - **병렬 처리**: 다수의 이미지를 분석할 때 `ThreadPoolExecutor(max_workers=5)`로 OpenAI API 요청을 병렬 처리
-- **싱글톤 클라이언트**: `OpenAIChatClient`, `OpenAIEmbeddingClient`, `PGVectorManager` 모두 클래스 변수로 단일 인스턴스 유지
+- **싱글톤 클라이언트**: `GoogleChatClient`, `GoogleEmbeddingClient`, `PGVectorManager` 모두 클래스 변수로 단일 인스턴스 유지
 - **수동 임베딩**: Apache AGE는 LangChain의 임베딩 자동 처리를 지원하지 않으므로 `embed_documents()` / `embed_query()`를 직접 호출
 - **코사인 유사도 검색**: AGE 내장 벡터 검색 미지원으로 Python에서 직접 코사인 유사도 계산 후 상위 k개 반환
+
+---
+
+## E2E 테스트 결과 (2026-03-01)
+
+전체 플로우 정상 동작 확인 완료.
+
+### 텍스트 저장 → 검색
+
+```bash
+# 1. 텍스트 저장
+curl -X POST http://localhost:8000/api/rag/add/text \
+  -F "collection_name=test_collection" \
+  -F "service_name=test_service" \
+  -F "screen_name=home" \
+  -F "version=1.0.0" \
+  -F "access_level=public" \
+  -F "text_content=FastAPI는 Python으로 빠른 API를 만드는 현대적인 웹 프레임워크입니다."
+# Response: {"result":"ok"}
+
+# 2. 검색
+curl -X POST http://localhost:8000/api/rag/search \
+  -H "Content-Type: application/json" \
+  -d '{"collection_name": "test_collection", "query": "FastAPI 웹 프레임워크", "k": 3}'
+# Response: {"results": [...]} (score: 0.7229)
+```
+
+### 이미지 업로드 → 검색
+
+```bash
+# 1. 이미지 업로드 (Gemini가 자동 분석)
+curl -X POST http://localhost:8000/api/rag/add/vector \
+  -F "collection_name=image_collection" \
+  -F "service_name=test_service" \
+  -F "screen_name=main_screen" \
+  -F "version=1.0.0" \
+  -F "access_level=public" \
+  -F "images=@./test_images/1.png"
+# Response: {"result":"ok"}
+
+# 2. 검색
+curl -X POST http://localhost:8000/api/rag/search \
+  -H "Content-Type: application/json" \
+  -d '{"collection_name": "image_collection", "query": "메인 화면 UI 구성", "k": 3}'
+# Response: {"results": [...]} (score: 0.7863)
+```
 
 ---
 
