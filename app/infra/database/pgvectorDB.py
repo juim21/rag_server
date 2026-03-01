@@ -32,6 +32,66 @@ class PGVectorManager:
         )
         PGVectorManager._session_factory = sessionmaker(bind=PGVectorManager._engine)
 
+    EMBEDDING_DIM = 3072  # gemini-embedding-001
+
+    def ensure_vector_table(self):
+        """rag_embeddings 테이블과 인덱스가 없으면 생성합니다. 앱 시작 시 1회 호출."""
+        with self.get_cursor() as cursor:
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS rag_embeddings (
+                    id BIGSERIAL PRIMARY KEY,
+                    collection_name TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    metadata JSONB,
+                    embedding vector({self.EMBEDDING_DIM})
+                );
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS rag_embeddings_collection_idx
+                ON rag_embeddings (collection_name);
+            """)
+            # 주의: pgvector의 ivfflat/hnsw 인덱스는 최대 2000차원까지만 지원
+            # gemini-embedding-001은 3072차원이므로 인덱스 없이 순차 검색(exact NN) 사용
+            # 향후 차원 축소(output_dimensionality) 적용 시 인덱스 추가 가능
+
+    def insert_embedding(self, collection_name: str, content: str, metadata: dict, embedding: list):
+        """pgvector 테이블에 임베딩과 콘텐츠를 삽입합니다."""
+        import json
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "INSERT INTO rag_embeddings (collection_name, content, metadata, embedding) VALUES (%s, %s, %s, %s)",
+                (collection_name, content, json.dumps(metadata), embedding)
+            )
+
+    def search_similar(self, collection_name: str, query_embedding: list, k: int = 5) -> list:
+        """pgvector 코사인 유사도 검색. 상위 k개를 (content, metadata, score) 형태로 반환합니다."""
+        import json
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT content, metadata, 1 - (embedding <=> %s::vector) AS score
+                FROM rag_embeddings
+                WHERE collection_name = %s
+                ORDER BY embedding <=> %s::vector
+                LIMIT %s
+                """,
+                (query_embedding, collection_name, query_embedding, k)
+            )
+            rows = cursor.fetchall()
+        return [
+            {"content": row[0], "metadata": row[1] if isinstance(row[1], dict) else json.loads(row[1]), "score": float(row[2])}
+            for row in rows
+        ]
+
+    def collection_exists_in_vector_table(self, collection_name: str) -> bool:
+        """pgvector 테이블에 해당 컬렉션 데이터가 있는지 확인합니다."""
+        with self.get_cursor() as cursor:
+            cursor.execute(
+                "SELECT EXISTS(SELECT 1 FROM rag_embeddings WHERE collection_name = %s LIMIT 1)",
+                (collection_name,)
+            )
+            return cursor.fetchone()[0]
+
     @contextmanager
     def get_cursor(self):
         """커넥션 풀에서 커넥션을 체크아웃하고 커서를 반환하는 컨텍스트 매니저.

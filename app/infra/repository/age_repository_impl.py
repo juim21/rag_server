@@ -1,13 +1,15 @@
 from typing import List, Dict, Any, Tuple
 import json
 from app.core.interface.rag_repository import RagRepository
-from app.infra.database import PGVectorManager  # 기존 PG 접속 정보 재사용
+from app.infra.database import PGVectorManager
+
 
 class AgeRepositoryImpl(RagRepository):
 
     def __init__(self):
         self.connection_manager = PGVectorManager()
         self.graph_name = 'biz_rag_graph'  # init-db.sh에서 생성한 그래프 이름
+        self.connection_manager.ensure_vector_table()  # pgvector 테이블 자동 생성
 
     def _execute_cypher(self, query: str, params: tuple = None):
         """Cypher 쿼리를 실행하는 도우미 함수.
@@ -34,9 +36,9 @@ class AgeRepositoryImpl(RagRepository):
 
     def save_documents(self, collection_name: str, documents: List[Dict[str, Any]]):
         """
-        문서를 그래프의 노드로 저장합니다.
-        - collection_name을 Screen 노드의 라벨로 사용합니다.
-        - Service 노드를 MERGE하고 Screen 노드와 BELONGS_TO 관계를 생성합니다.
+        문서를 두 곳에 저장합니다.
+        1. Apache AGE 그래프: Screen 노드와 Service 노드의 BELONGS_TO 관계
+        2. pgvector 테이블: 코사인 유사도 검색을 위한 임베딩 저장
         구조: (Screen:collection_name)-[:BELONGS_TO]->(Service)
         """
         for doc in documents:
@@ -49,79 +51,48 @@ class AgeRepositoryImpl(RagRepository):
             version = metadata.get("version", "1.0.0").replace("'", "''")
             metadata_str = json.dumps(metadata).replace("'", "''")
 
-            # 1. Service 노드 MERGE (없으면 생성, 있으면 재사용)
+            # 1. AGE: Service 노드 MERGE
             service_query = """
             MERGE (s:Service {name: '%s', version: '%s'})
             RETURN s
             """ % (service_name, version)
             self._execute_cypher(service_query)
 
-            # 2. Screen 노드 CREATE + Service와 BELONGS_TO 관계 생성
+            # 2. AGE: Screen 노드 CREATE + BELONGS_TO 관계 생성
             screen_query = """
             MATCH (s:Service {name: '%s', version: '%s'})
             CREATE (n:%s {
                 content: '%s',
-                embedding: %s,
                 metadata: '%s',
                 screen_name: '%s'
             })-[:BELONGS_TO]->(s)
             RETURN n
             """ % (service_name, version, collection_name,
-                   content.replace("'", "''"), embedding,
+                   content.replace("'", "''"),
                    metadata_str, screen_name)
             self._execute_cypher(screen_query)
 
+            # 3. pgvector 테이블: 임베딩 저장 (검색 전용)
+            self.connection_manager.insert_embedding(
+                collection_name=collection_name,
+                content=content,
+                metadata=metadata,
+                embedding=embedding
+            )
+
     def similarity_search(self, collection_name: str, query_embedding: List[float], k: int = 5) -> List[Tuple[Dict[str, Any], float]]:
         """
-        벡터 유사도 검색을 수행합니다.
-        AGE는 아직 내장 벡터 검색 기능이 미흡하여, 순수 Python으로 유사도를 계산합니다.
+        pgvector의 코사인 유사도 연산자(<=>)를 사용하여 DB 레벨에서 ANN 검색을 수행합니다.
+        Python 루프 방식 대비 대용량 데이터에서 월등히 빠릅니다.
         """
-        # 1. 모든 문서 노드를 가져옵니다.
-        query = f"MATCH (n:{collection_name}) RETURN n"
-        nodes = self._execute_cypher(query)
-
-        # 2. 코사인 유사도 계산
-        def cosine_similarity(v1, v2):
-            dot_product = sum(a * b for a, b in zip(v1, v2))
-            norm_v1 = sum(a * a for a in v1) ** 0.5
-            norm_v2 = sum(b * b for b in v2) ** 0.5
-            if norm_v1 == 0 or norm_v2 == 0:
-                return 0.0
-            return dot_product / (norm_v1 * norm_v2)
-
-        # 3. 유사도 계산 및 정렬
-        results = []
-        for node_container in nodes:
-            # agtype 파싱 결과는 {"id":..., "label":..., "properties":{...}} 구조
-            if 'properties' in node_container:
-                node = node_container['properties']
-            else:
-                node = node_container.get('n', {}).get('properties', {})
-            if 'embedding' in node and 'content' in node:
-                sim = cosine_similarity(query_embedding, node['embedding'])
-
-                # metadata 문자열을 다시 dict로 변환
-                metadata = json.loads(node.get('metadata', '{}'))
-
-                document = {
-                    "page_content": node['content'],
-                    "metadata": metadata
-                }
-                results.append((document, sim))
-
-        # 4. 유사도 높은 순으로 정렬하여 k개 반환
-        results.sort(key=lambda x: x[1], reverse=True)
-        return results[:k]
+        rows = self.connection_manager.search_similar(collection_name, query_embedding, k)
+        return [
+            ({"page_content": row["content"], "metadata": row["metadata"]}, row["score"])
+            for row in rows
+        ]
 
     def collection_exists(self, collection_name: str) -> bool:
         """
-        해당 라벨을 가진 노드가 하나라도 있는지 확인하여 컬렉션 존재 여부를 판단합니다.
+        pgvector 테이블에 해당 컬렉션 데이터가 있는지 확인합니다.
         """
-        query = f"MATCH (n:{collection_name}) RETURN count(n) AS cnt"
-        result = self._execute_cypher(query)
-        if not result:
-            return False
-        cnt = result[0]
-        if isinstance(cnt, dict):
-            return cnt.get("cnt", 0) > 0
-        return int(cnt) > 0
+        return self.connection_manager.collection_exists_in_vector_table(collection_name)
