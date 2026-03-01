@@ -22,9 +22,16 @@ class AgeRepositoryImpl(RagRepository):
             self.cursor.execute(full_query, params)
 
             # agtype 결과를 Python dict/list로 변환하여 반환
+            # AGE는 ::vertex, ::edge 등의 타입 접미사를 붙이므로 제거 후 파싱
             rows = self.cursor.fetchall()
             self.cursor.connection.commit()
-            return [json.loads(row[0]) for row in rows]
+            result = []
+            for row in rows:
+                s = str(row[0])
+                if "::" in s:
+                    s = s[:s.rfind("::")]
+                result.append(json.loads(s))
+            return result
         except Exception as e:
             print(f"Cypher 쿼리 실행 오류: {e}")
             self.cursor.connection.rollback()
@@ -93,7 +100,11 @@ class AgeRepositoryImpl(RagRepository):
         # 3. 유사도 계산 및 정렬
         results = []
         for node_container in nodes:
-            node = node_container.get('n', {}).get('properties', {})
+            # agtype 파싱 결과는 {"id":..., "label":..., "properties":{...}} 구조
+            if 'properties' in node_container:
+                node = node_container['properties']
+            else:
+                node = node_container.get('n', {}).get('properties', {})
             if 'embedding' in node and 'content' in node:
                 sim = cosine_similarity(query_embedding, node['embedding'])
                 
