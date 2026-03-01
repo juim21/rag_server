@@ -11,17 +11,23 @@ class AgeRepositoryImpl(RagRepository):
         self.graph_name = 'biz_rag_graph'  # init-db.sh에서 생성한 그래프 이름
         self.connection_manager.ensure_vector_table()  # pgvector 테이블 자동 생성
 
-    def _execute_cypher(self, query: str, params: tuple = None):
+    def _execute_cypher(self, query: str, cypher_params: dict = None):
         """Cypher 쿼리를 실행하는 도우미 함수.
-        호출마다 커넥션 풀에서 커넥션을 체크아웃하고, 완료 후 자동 반납합니다."""
+        호출마다 커넥션 풀에서 커넥션을 체크아웃하고, 완료 후 자동 반납합니다.
+        cypher_params: Cypher 쿼리 내 $param 자리를 채울 dict. JSON으로 인코딩되어 AGE에 전달됩니다."""
         with self.connection_manager.get_cursor() as cursor:
             # AGE 로드 및 search_path 설정
             cursor.execute("LOAD 'age';")
             cursor.execute("SET search_path = ag_catalog, '$user', public;")
 
-            # Cypher 쿼리 실행
-            full_query = f"SELECT * FROM cypher('{self.graph_name}', $$ {query} $$) as (result agtype);"
-            cursor.execute(full_query, params)
+            # Cypher 쿼리 실행 (파라미터가 있으면 AGE 파라미터 바인딩 사용)
+            if cypher_params:
+                params_json = json.dumps(cypher_params, ensure_ascii=False)
+                full_query = f"SELECT * FROM cypher('{self.graph_name}', $$ {query} $$, %s) as (result agtype);"
+                cursor.execute(full_query, (params_json,))
+            else:
+                full_query = f"SELECT * FROM cypher('{self.graph_name}', $$ {query} $$) as (result agtype);"
+                cursor.execute(full_query)
 
             # agtype 결과를 Python dict/list로 변환하여 반환
             # AGE는 ::vertex, ::edge 등의 타입 접미사를 붙이므로 제거 후 파싱
@@ -40,37 +46,45 @@ class AgeRepositoryImpl(RagRepository):
         1. Apache AGE 그래프: Screen 노드와 Service 노드의 BELONGS_TO 관계
         2. pgvector 테이블: 코사인 유사도 검색을 위한 임베딩 저장
         구조: (Screen:collection_name)-[:BELONGS_TO]->(Service)
+        AGE 파라미터 바인딩($param)으로 따옴표/특수문자 안전 처리.
         """
         for doc in documents:
             content = doc.get("page_content", "")
             embedding = doc.get("embedding", [])
             metadata = doc.get("metadata", {})
 
-            service_name = metadata.get("service_name", "unknown").replace("'", "''")
-            screen_name = metadata.get("screen_name", "unknown").replace("'", "''")
-            version = metadata.get("version", "1.0.0").replace("'", "''")
-            metadata_str = json.dumps(metadata).replace("'", "''")
+            service_name = metadata.get("service_name", "unknown")
+            screen_name = metadata.get("screen_name", "unknown")
+            version = metadata.get("version", "1.0.0")
 
-            # 1. AGE: Service 노드 MERGE
+            # 1. AGE: Service 노드 MERGE (파라미터 바인딩으로 특수문자 안전 처리)
             service_query = """
-            MERGE (s:Service {name: '%s', version: '%s'})
+            MERGE (s:Service {name: $service_name, version: $version})
             RETURN s
-            """ % (service_name, version)
-            self._execute_cypher(service_query)
+            """
+            self._execute_cypher(service_query, {
+                "service_name": service_name,
+                "version": version
+            })
 
             # 2. AGE: Screen 노드 CREATE + BELONGS_TO 관계 생성
-            screen_query = """
-            MATCH (s:Service {name: '%s', version: '%s'})
-            CREATE (n:%s {
-                content: '%s',
-                metadata: '%s',
-                screen_name: '%s'
-            })-[:BELONGS_TO]->(s)
+            # collection_name은 노드 레이블이므로 백틱으로 감싸서 직접 삽입
+            screen_query = f"""
+            MATCH (s:Service {{name: $service_name, version: $version}})
+            CREATE (n:`{collection_name}` {{
+                content: $content,
+                metadata: $metadata_str,
+                screen_name: $screen_name
+            }})-[:BELONGS_TO]->(s)
             RETURN n
-            """ % (service_name, version, collection_name,
-                   content.replace("'", "''"),
-                   metadata_str, screen_name)
-            self._execute_cypher(screen_query)
+            """
+            self._execute_cypher(screen_query, {
+                "service_name": service_name,
+                "version": version,
+                "content": content,
+                "metadata_str": json.dumps(metadata, ensure_ascii=False),
+                "screen_name": screen_name
+            })
 
             # 3. pgvector 테이블: 임베딩 저장 (검색 전용)
             self.connection_manager.insert_embedding(
