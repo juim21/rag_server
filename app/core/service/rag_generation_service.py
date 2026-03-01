@@ -188,6 +188,38 @@ class RagGenerationService:
         query_embedding = self.embedding_client.embeddings.embed_query(query)
         return self.vector_repository.similarity_search(collection_name, query_embedding, k, filters)
 
+    def analyze_code_impact(self, collection_name: str, code: str, k: int = 5, filters: dict = None) -> dict:
+        """
+        소스코드를 분석하여 영향받는 화면을 탐지하고 테스트 영향도 리포트를 생성합니다.
+        1단계: LLM으로 코드 기능 요약
+        2단계: 요약 텍스트 임베딩 → RAG 검색으로 관련 화면 탐색
+        3단계: LLM으로 영향도 분석 리포트 생성
+        """
+        from app.config.prompt import code_summary_prompt, code_impact_prompt
+
+        # 1단계: 코드 기능 요약
+        summary_prompt = code_summary_prompt.format(code=code)
+        code_summary = self.llm_client.llm_request(summary_prompt)
+
+        # 2단계: 요약 임베딩으로 관련 화면 RAG 검색
+        query_embedding = self.embedding_client.embeddings.embed_query(code_summary)
+        related = self.vector_repository.similarity_search(collection_name, query_embedding, k, filters)
+
+        # 3단계: 영향도 분석 리포트 생성
+        screens_text = "\n\n".join([
+            f"[화면 {i+1}] 서비스: {doc['metadata'].get('service_name', '')}, "
+            f"화면명: {doc['metadata'].get('screen_name', '')}, 유사도: {round(score, 4)}\n{doc['page_content'][:300]}..."
+            for i, (doc, score) in enumerate(related)
+        ])
+
+        impact_prompt = code_impact_prompt.format(code=code, screens=screens_text if screens_text else "관련 화면 없음")
+        analysis = self.llm_client.llm_request(impact_prompt)
+
+        return {
+            "related_screens": related,
+            "analysis": analysis
+        }
+
     def _insert_to_collection(self, collection_name: str, documents: List[Document]):
         print("collection_name => " + collection_name)
 

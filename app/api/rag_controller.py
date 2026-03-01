@@ -1,7 +1,8 @@
 from app.core.service.rag_generation_service import RagGenerationService
 from app.di_container import DIContainer
 from app.api.model.response import RAGResponse, RAGSearchResponse
-from app.api.model.request.rag_request import RAGRequest, RAGSearchRequest
+from app.api.model.response.rag_response import RAGCodeAnalyzeResponse
+from app.api.model.request.rag_request import RAGRequest, RAGSearchRequest, RAGCodeAnalyzeRequest
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from fastapi import Form, UploadFile, File, Request
@@ -76,6 +77,35 @@ def search_rag(request: RAGSearchRequest) -> JSONResponse:
             }
             for doc, score in results
         ]
+    })
+
+@router.post("/analyze/code", response_model=RAGCodeAnalyzeResponse)
+def analyze_code(request: RAGCodeAnalyzeRequest) -> JSONResponse:
+    """
+    소스코드를 분석하여 영향받는 화면을 탐지하고 테스트 영향도 리포트를 생성합니다.
+    1단계: LLM으로 코드 기능 요약
+    2단계: 요약 임베딩으로 관련 화면 RAG 검색
+    3단계: LLM으로 영향도 분석 리포트 생성
+    """
+    ragGenService = DIContainer.get(RagGenerationService)
+
+    result = ragGenService.analyze_code_impact(
+        collection_name=request.collection_name,
+        code=request.code,
+        k=request.k,
+        filters=request.filters
+    )
+
+    return JSONResponse(content={
+        "related_screens": [
+            {
+                "content": doc["page_content"],
+                "metadata": doc["metadata"],
+                "score": round(score, 4)
+            }
+            for doc, score in result["related_screens"]
+        ],
+        "analysis": result["analysis"]
     })
 
 @router.get("/health")
