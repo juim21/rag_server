@@ -62,6 +62,7 @@ FastAPI (rag_controller)
 | ORM | SQLAlchemy 2.0, psycopg3 |
 | Cache | Redis 7 (redis[asyncio]) |
 | Monitoring | structlog 24.4, prometheus-client, prometheus-fastapi-instrumentator |
+| Observability | Prometheus, Grafana |
 | 컨테이너 | Docker, Docker Compose |
 
 ---
@@ -586,9 +587,9 @@ curl "http://localhost:8000/api/rag/graph/screen/my_collection/%EA%B9%83%ED%97%8
 | 9단계 | 크로스인코더 재랭킹 (`BAAI/bge-reranker-base`, `rerank=true` 선택 적용) | ✅ 완료 |
 | 10단계 | Redis 캐싱 레이어 도입 (TTL 1시간, SCAN 기반 무효화, NullCacheClient 하위 호환) | ✅ 완료 |
 | 11단계 | 모니터링 / 관찰가능성 (structlog JSON 로그, Prometheus 메트릭, `/health` 강화) | ✅ 완료 |
+| 12단계 | Grafana 대시보드 연동 (Prometheus + Grafana 컨테이너, RAG 전용 대시보드) | ✅ 완료 |
 
 ## 향후 개선 계획
 
 - 멀티모달 임베딩 적용 (이미지 직접 임베딩)
 - AGE 그래프 심화 탐색 (다단계 관계 순회, 서비스 간 의존성 분석)
-- Grafana 대시보드 연동 (Prometheus 메트릭 시각화)
