@@ -25,12 +25,14 @@ def setup_dependencies():
     from app.core.service.rag_generation_service import RagGenerationService
     from app.core.interface import RagRepository
     from app.core.interface.llm_client import LlmClient
+    from app.core.interface.rerank_client import RerankClient
     from app.infra.external.llm.google_client import GoogleChatClient
+    from app.infra.external.rerank.cross_encoder_client import CrossEncoderClient
     from app.di_container import DIContainer
-
 
     DIContainer.register(RagRepository, AgeRepositoryImpl())
     DIContainer.register(LlmClient, GoogleChatClient())
+    DIContainer.register(RerankClient, CrossEncoderClient())
     DIContainer.register(RagGenerationService, RagGenerationService())
     
     

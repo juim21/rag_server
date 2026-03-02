@@ -10,6 +10,7 @@ class RAGSearchRequest(BaseModel):
     k: int = 5
     filters: Optional[Dict[str, Any]] = None  # 예: {"service_name": "my_service", "access_level": "user"}
     search_mode: str = "vector"  # "vector" | "hybrid" (벡터+BM25 RRF)
+    rerank: bool = False  # True: 크로스인코더 재랭킹 적용 (k*3 오버패치 후 재정렬)
 
 class RAGCodeAnalyzeRequest(BaseModel):
     collection_name: str

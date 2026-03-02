@@ -49,7 +49,8 @@ async def search_rag(request: RAGSearchRequest) -> JSONResponse:
         query=request.query,
         k=request.k,
         filters=request.filters,
-        search_mode=request.search_mode
+        search_mode=request.search_mode,
+        rerank=request.rerank
     )
     return JSONResponse(content={
         "results": [

@@ -18,10 +18,12 @@ class RagGenerationService:
 
     def __init__(self):
         from app.infra.external.embedding.google_embedding_client import GoogleEmbeddingClient
+        from app.core.interface.rerank_client import RerankClient
 
         self.imageExtractor = ImageExtractor()
         self.vector_repository = DIContainer.get(RagRepository)
         self.llm_client = DIContainer.get(LlmClient)
+        self.rerank_client = DIContainer.get(RerankClient)
         self.embedding_client = GoogleEmbeddingClient()
 
     # 대량의 데이터를 업로드 하는 방식 - 특정 디렉토리에 파일을 일괄로 저장 및 파일별 입력 데이터를 일괄로 업로드
@@ -136,15 +138,27 @@ class RagGenerationService:
         await asyncio.to_thread(self._insert_to_collection, collection_name, application_docuement_list)
 
     async def search_rag(self, collection_name: str, query: str, k: int = 5,
-                         filters: dict = None, search_mode: str = "vector"):
+                         filters: dict = None, search_mode: str = "vector",
+                         rerank: bool = False):
+        # 재랭킹 사용 시 충분한 후보를 오버패치
+        fetch_k = k * 3 if rerank else k
         query_embedding = await asyncio.to_thread(
             self.embedding_client.embeddings.embed_query, query
         )
-        return await asyncio.to_thread(
+        results = await asyncio.to_thread(
             self.vector_repository.similarity_search,
-            collection_name, query_embedding, k, filters,
+            collection_name, query_embedding, fetch_k, filters,
             search_mode, query if search_mode == "hybrid" else None
         )
+
+        if rerank and results and self.rerank_client:
+            docs = [r[0]["page_content"] for r in results]
+            reranked_indices = await asyncio.to_thread(
+                self.rerank_client.rerank, query, docs, k
+            )
+            results = [(results[idx][0], score) for idx, score in reranked_indices]
+
+        return results
 
     async def analyze_code_impact(self, collection_name: str, code: str,
                                    k: int = 5, filters: dict = None) -> dict:
