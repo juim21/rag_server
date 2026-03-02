@@ -440,7 +440,7 @@ service = DIContainer.get(RagGenerationService)
 - **비동기 병렬 처리**: `asyncio.gather()`로 다수 이미지·텍스트 LLM 분석을 동시 실행, DB/임베딩 동기 작업은 `asyncio.to_thread()`로 이벤트 루프 블로킹 방지
 - **싱글톤 클라이언트**: `GoogleChatClient`, `GoogleEmbeddingClient`, `PGVectorManager` 모두 클래스 변수로 단일 인스턴스 유지
 - **수동 임베딩**: Apache AGE는 LangChain의 임베딩 자동 처리를 지원하지 않으므로 `embed_documents()` / `embed_query()`를 직접 호출
-- **DB 레벨 벡터 검색**: pgvector `<=>` 코사인 거리 연산자로 DB에서 직접 검색 (3072차원 → ivfflat/hnsw 인덱스 불가, 순차 검색 사용)
+- **halfvec + HNSW 인덱스**: 임베딩을 `halfvec(3072)` 타입(float16)으로 저장하여 메모리를 50% 절약하고 HNSW 인덱스(`halfvec_cosine_ops`) 지원. `vector(3072)`는 최대 2000차원까지만 hnsw/ivfflat 인덱스를 지원하지만 `halfvec`은 16000차원까지 지원하여 3072차원에서도 O(log n) ANN 검색 가능
 - **하이브리드 검색**: tsvector + GIN 인덱스로 BM25 키워드 검색, RRF(Reciprocal Rank Fusion)로 벡터 결과와 결합
 - **AGE Cypher 파라미터 바인딩**: `$param` 방식 + JSON 직렬화로 LLM 생성 텍스트의 특수문자·따옴표 안전 처리
 - **커넥션 풀 안전성**: `@contextmanager` 기반 `get_cursor()`로 자동 commit/rollback/반납 (멀티스레드 안전)
@@ -542,11 +542,11 @@ curl "http://localhost:8000/api/rag/graph/screen/my_collection/%EA%B9%83%ED%97%8
 | 4단계 | `POST /api/rag/analyze/code` 소스코드 영향도 분석 API | ✅ 완료 |
 | 5단계 | 하이브리드 검색 (BM25 tsvector + pgvector RRF) | ✅ 완료 |
 | 6단계 | asyncio 비동기 처리 전환 (LLM 병렬 호출, to_thread 래핑) | ✅ 완료 |
+| 7단계 | `halfvec(3072)` 전환 + HNSW 인덱스 도입 (메모리 50% 절약, ANN 검색) | ✅ 완료 |
 | 8단계 | AGE 그래프 탐색 API (서비스별 화면 목록 / 연관 화면 탐색) | ✅ 완료 |
 
 ## 향후 개선 계획
 
-- `asyncio` 기반 비동기 처리로 전환 (현재 ThreadPoolExecutor 사용)
-- pgvector 인덱스 최적화 (3072차원 분해 또는 차원 축소 적용)
-- AGE 그래프 관계 기반 탐색 API (연관 서비스·화면 그래프 쿼리)
-- 검색 결과 재랭킹(Re-ranking) 모델 적용
+- 검색 결과 재랭킹(Re-ranking) 모델 적용 (9단계)
+- 멀티모달 임베딩 적용 (이미지 직접 임베딩)
+- AGE 그래프 심화 탐색 (다단계 관계 순회, 서비스 간 의존성 분석)
