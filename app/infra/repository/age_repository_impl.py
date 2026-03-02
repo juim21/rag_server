@@ -111,3 +111,66 @@ class AgeRepositoryImpl(RagRepository):
         pgvector 테이블에 해당 컬렉션 데이터가 있는지 확인합니다.
         """
         return self.connection_manager.collection_exists_in_vector_table(collection_name)
+
+    def get_screens_by_service(self, service_name: str, version: str = None) -> list:
+        """
+        AGE 그래프에서 서비스에 속한 화면 노드 전체를 조회합니다.
+        Screen 노드의 screen_name, content, metadata를 반환합니다.
+        """
+        if version:
+            query = """
+            MATCH (n)-[:BELONGS_TO]->(s:Service {name: $service_name, version: $version})
+            RETURN n
+            """
+            params = {"service_name": service_name, "version": version}
+        else:
+            query = """
+            MATCH (n)-[:BELONGS_TO]->(s:Service {name: $service_name})
+            RETURN n
+            """
+            params = {"service_name": service_name}
+
+        rows = self._execute_cypher(query, params)
+        result = []
+        for row in rows:
+            props = row.get("properties", {})
+            metadata = props.get("metadata", "{}")
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except Exception:
+                    metadata = {}
+            result.append({
+                "screen_name": props.get("screen_name", ""),
+                "content": props.get("content", ""),
+                "metadata": metadata,
+            })
+        return result
+
+    def get_related_screens(self, collection_name: str, screen_name: str) -> list:
+        """
+        AGE 그래프에서 같은 서비스에 속한 연관 화면 노드를 조회합니다.
+        지정한 screen_name의 화면과 동일 서비스의 다른 화면들을 반환합니다.
+        """
+        query = f"""
+        MATCH (target:`{collection_name}` {{screen_name: $screen_name}})-[:BELONGS_TO]->(s:Service)
+        MATCH (other)-[:BELONGS_TO]->(s)
+        WHERE id(other) <> id(target)
+        RETURN other
+        """
+        rows = self._execute_cypher(query, {"screen_name": screen_name})
+        result = []
+        for row in rows:
+            props = row.get("properties", {})
+            metadata = props.get("metadata", "{}")
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except Exception:
+                    metadata = {}
+            result.append({
+                "screen_name": props.get("screen_name", ""),
+                "content": props.get("content", ""),
+                "metadata": metadata,
+            })
+        return result

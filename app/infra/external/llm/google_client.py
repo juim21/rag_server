@@ -21,7 +21,7 @@ class GoogleChatClient(LlmClient):
 
         GoogleChatClient._llm = ChatGoogleGenerativeAI(
             google_api_key=google_api_key,
-            model="gemini-2.0-flash-lite",
+            model="gemini-2.5-flash",
             temperature=0
         )
 
@@ -31,3 +31,7 @@ class GoogleChatClient(LlmClient):
 
     def llm_request(self, prompt) -> str:
         return self._llm.invoke(prompt).content
+
+    async def async_llm_request(self, prompt) -> str:
+        result = await self._llm.ainvoke(prompt)
+        return result.content

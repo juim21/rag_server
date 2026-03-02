@@ -1,15 +1,17 @@
+import asyncio
+import json
+import base64
+from typing import List, Dict
+
+from starlette.datastructures import FormData
+from langchain.prompts import ChatPromptTemplate
+from langchain_core.documents import Document
+
 from app.di_container import DIContainer
 from app.core.interface import RagRepository
-import json
-from starlette.datastructures import FormData
-from app.core.service.data_extractor import ImageExtractor
 from app.core.interface.llm_client import LlmClient
+from app.core.service.data_extractor import ImageExtractor
 from app.config.prompt import app_analysis_prompt_user, app_analysis_prompt_system
-from langchain.prompts import ChatPromptTemplate
-from typing import List, Dict
-import concurrent.futures
-from langchain_core.documents import Document
-import base64
 
 
 class RagGenerationService:
@@ -20,23 +22,14 @@ class RagGenerationService:
         self.imageExtractor = ImageExtractor()
         self.vector_repository = DIContainer.get(RagRepository)
         self.llm_client = DIContainer.get(LlmClient)
-        self.embedding_client = GoogleEmbeddingClient()  # DI 주입 방식으로 한 번만 생성
+        self.embedding_client = GoogleEmbeddingClient()
 
-    #대량의 데이터를 업로드 하는 방식 - 특정 디렉토리에 파일을 일괄로 저장 및 파일별 입력 데이터를 일괄로 업로드
-    def generation_rag(self, collection_name : str):
-
-        #디렉토리 - 임시로 지정
+    # 대량의 데이터를 업로드 하는 방식 - 특정 디렉토리에 파일을 일괄로 저장 및 파일별 입력 데이터를 일괄로 업로드
+    async def generation_rag(self, collection_name: str):
         directory_path = "./test_images"
-
-        #데이터 임시로 읽어오기.
         test_data = self._test_input_data()
-
-        #1. 이미지데이터 읽어오기 - 딕셔너리 형태.
         image_list = self.imageExtractor.image_to_base64(directory_path)
 
-        result = []
-
-        # 이슈 #4: image_list 항목을 통합 data_item 형식으로 변환
         data_items = []
         for temp in image_list:
             key = temp['filename'].split(".")[0]
@@ -50,46 +43,30 @@ class RagGenerationService:
                 "image": temp['base64'],
             })
 
-        #2. llm에 요청해서 이미지 분석텍스트 받아오기
-        # 한번에 다량의 이미지를 넘기는 경우, 속도가 느려서 멀티스레드로 처리
-        # TODO : 추후에 asyncio로 개선 필요.
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [
-                executor.submit(self._call_llm_with_image, data_item)
-                for data_item in data_items
-            ]
-            # 이슈 #5: as_completed()를 with 블록 안으로 이동
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    temp_result = future.result()
-                    result.append(temp_result)
-                except Exception as e:
-                    print(f"❌ 처리 실패: {e}")
+        tasks = [self._call_llm_with_image(item) for item in data_items]
+        results_raw = await asyncio.gather(*tasks, return_exceptions=True)
+        result = []
+        for r in results_raw:
+            if isinstance(r, Exception):
+                print(f"❌ 처리 실패: {r}")
+            else:
+                result.append(r)
 
-        #3. Document로 변환.
         application_docuement_list = self.imageExtractor.create_column_document(result)
         print(application_docuement_list)
         print("test => " + collection_name)
 
-        #4. 벡터에 넣기.
-        self._insert_to_collection(
-            collection_name=collection_name,
-            documents=application_docuement_list
-        )
+        await asyncio.to_thread(self._insert_to_collection, collection_name, application_docuement_list)
 
-    ##기존에 있는 컬렉션에 데이터 임베딩.
-    ##멀티파트 형식으로 데이터를 요청했을때 처리.
-    def add_rag_data(self, collection_name, formData: FormData):
-
-        #form데이터 정제
-        data_items = []
-
+    # 기존에 있는 컬렉션에 데이터 임베딩 (멀티파트 이미지)
+    async def add_rag_data(self, collection_name: str, formData: FormData):
         service_names = formData.getlist("service_name")
         screen_names = formData.getlist("screen_name")
         versions = formData.getlist("version")
         access_levels = formData.getlist("access_level")
         images = formData.getlist("images")
 
+        data_items = []
         for i in range(len(service_names)):
             data_items.append({
                 "service_name": service_names[i],
@@ -100,50 +77,35 @@ class RagGenerationService:
                 "filename": images[i].filename
             })
 
+        tasks = [self._call_llm_with_image(item) for item in data_items]
+        results_raw = await asyncio.gather(*tasks, return_exceptions=True)
         result = []
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [
-                executor.submit(self._call_llm_with_image, data_item)  # 이슈 #4: 통합 메서드 사용
-                for data_item in data_items
-            ]
-            # 이슈 #5: as_completed()를 with 블록 안으로 이동
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    temp_result = future.result()
-                    result.append(temp_result)
-                except Exception as e:
-                    error_type = type(e).__name__
-                    if "OpenAI" in error_type or "API" in str(e):
-                        print(f"❌ API 에러: {str(e)[:150]}...")
-                    elif "JSON" in str(e):
-                        print(f"❌ JSON 파싱 에러: {str(e)[:100]}...")
-                    elif "timeout" in str(e).lower():
-                        print(f"❌ 타임아웃 에러")
-                    else:
-                        print(f"❌ {error_type}: {str(e)[:100]}...")
+        for r in results_raw:
+            if isinstance(r, Exception):
+                error_type = type(r).__name__
+                if "OpenAI" in error_type or "API" in str(r):
+                    print(f"❌ API 에러: {str(r)[:150]}...")
+                elif "JSON" in str(r):
+                    print(f"❌ JSON 파싱 에러: {str(r)[:100]}...")
+                elif "timeout" in str(r).lower():
+                    print(f"❌ 타임아웃 에러")
+                else:
+                    print(f"❌ {error_type}: {str(r)[:100]}...")
+            else:
+                result.append(r)
 
         application_docuement_list = self.imageExtractor.create_column_document(result)
+        await asyncio.to_thread(self._insert_to_collection, collection_name, application_docuement_list)
 
-        #4. 벡터에 넣기.
-        self._insert_to_collection(
-            collection_name=collection_name,
-            documents=application_docuement_list
-        )
-
-    ##기존에 있는 컬렉션에 텍스트 데이터 임베딩.
-    ##멀티파트 형식으로 텍스트 데이터를 요청했을때 처리.
-    def add_rag_text_data(self, collection_name, formData: FormData):
-
-        #form데이터 정제
-        data_items = []
-
+    # 기존에 있는 컬렉션에 텍스트 데이터 임베딩 (멀티파트 텍스트)
+    async def add_rag_text_data(self, collection_name: str, formData: FormData):
         service_names = formData.getlist("service_name")
         screen_names = formData.getlist("screen_name")
         versions = formData.getlist("version")
         access_levels = formData.getlist("access_level")
         text_contents = formData.getlist("text_content")
 
+        data_items = []
         for i in range(len(service_names)):
             data_items.append({
                 "service_name": service_names[i],
@@ -153,46 +115,39 @@ class RagGenerationService:
                 "text_content": text_contents[i]
             })
 
+        tasks = [self._response_llm_text_data(item) for item in data_items]
+        results_raw = await asyncio.gather(*tasks, return_exceptions=True)
         result = []
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            futures = [
-                executor.submit(self._response_llm_text_data, data_item)
-                for data_item in data_items
-            ]
-            # 이슈 #5: as_completed()를 with 블록 안으로 이동
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    temp_result = future.result()
-                    result.append(temp_result)
-                except Exception as e:
-                    error_type = type(e).__name__
-                    if "OpenAI" in error_type or "API" in str(e):
-                        print(f"❌ API 에러: {str(e)[:150]}...")
-                    elif "JSON" in str(e):
-                        print(f"❌ JSON 파싱 에러: {str(e)[:100]}...")
-                    elif "timeout" in str(e).lower():
-                        print(f"❌ 타임아웃 에러")
-                    else:
-                        print(f"❌ {error_type}: {str(e)[:100]}...")
+        for r in results_raw:
+            if isinstance(r, Exception):
+                error_type = type(r).__name__
+                if "OpenAI" in error_type or "API" in str(r):
+                    print(f"❌ API 에러: {str(r)[:150]}...")
+                elif "JSON" in str(r):
+                    print(f"❌ JSON 파싱 에러: {str(r)[:100]}...")
+                elif "timeout" in str(r).lower():
+                    print(f"❌ 타임아웃 에러")
+                else:
+                    print(f"❌ {error_type}: {str(r)[:100]}...")
+            else:
+                result.append(r)
 
         application_docuement_list = self.imageExtractor.create_column_document(result)
+        await asyncio.to_thread(self._insert_to_collection, collection_name, application_docuement_list)
 
-        #4. 벡터에 넣기.
-        self._insert_to_collection(
-            collection_name=collection_name,
-            documents=application_docuement_list
+    async def search_rag(self, collection_name: str, query: str, k: int = 5,
+                         filters: dict = None, search_mode: str = "vector"):
+        query_embedding = await asyncio.to_thread(
+            self.embedding_client.embeddings.embed_query, query
         )
-
-    def search_rag(self, collection_name: str, query: str, k: int = 5, filters: dict = None, search_mode: str = "vector"):
-        query_embedding = self.embedding_client.embeddings.embed_query(query)
-        return self.vector_repository.similarity_search(
+        return await asyncio.to_thread(
+            self.vector_repository.similarity_search,
             collection_name, query_embedding, k, filters,
-            search_mode=search_mode,
-            query_text=query if search_mode == "hybrid" else None
+            search_mode, query if search_mode == "hybrid" else None
         )
 
-    def analyze_code_impact(self, collection_name: str, code: str, k: int = 5, filters: dict = None) -> dict:
+    async def analyze_code_impact(self, collection_name: str, code: str,
+                                   k: int = 5, filters: dict = None) -> dict:
         """
         소스코드를 분석하여 영향받는 화면을 탐지하고 테스트 영향도 리포트를 생성합니다.
         1단계: LLM으로 코드 기능 요약
@@ -201,15 +156,16 @@ class RagGenerationService:
         """
         from app.config.prompt import code_summary_prompt, code_impact_prompt
 
-        # 1단계: 코드 기능 요약
         summary_prompt = code_summary_prompt.format(code=code)
-        code_summary = self.llm_client.llm_request(summary_prompt)
+        code_summary = await self.llm_client.async_llm_request(summary_prompt)
 
-        # 2단계: 요약 임베딩으로 관련 화면 RAG 검색
-        query_embedding = self.embedding_client.embeddings.embed_query(code_summary)
-        related = self.vector_repository.similarity_search(collection_name, query_embedding, k, filters)
+        query_embedding = await asyncio.to_thread(
+            self.embedding_client.embeddings.embed_query, code_summary
+        )
+        related = await asyncio.to_thread(
+            self.vector_repository.similarity_search, collection_name, query_embedding, k, filters
+        )
 
-        # 3단계: 영향도 분석 리포트 생성
         screens_text = "\n\n".join([
             f"[화면 {i+1}] 서비스: {doc['metadata'].get('service_name', '')}, "
             f"화면명: {doc['metadata'].get('screen_name', '')}, 유사도: {round(score, 4)}\n{doc['page_content'][:300]}..."
@@ -217,17 +173,28 @@ class RagGenerationService:
         ])
 
         impact_prompt = code_impact_prompt.format(code=code, screens=screens_text if screens_text else "관련 화면 없음")
-        analysis = self.llm_client.llm_request(impact_prompt)
+        analysis = await self.llm_client.async_llm_request(impact_prompt)
 
         return {
             "related_screens": related,
             "analysis": analysis
         }
 
+    async def get_screens_by_service(self, service_name: str, version: str = None) -> list:
+        """AGE 그래프에서 서비스에 속한 화면 목록을 조회합니다."""
+        return await asyncio.to_thread(
+            self.vector_repository.get_screens_by_service, service_name, version
+        )
+
+    async def get_related_screens(self, collection_name: str, screen_name: str) -> list:
+        """AGE 그래프에서 같은 서비스의 연관 화면을 조회합니다."""
+        return await asyncio.to_thread(
+            self.vector_repository.get_related_screens, collection_name, screen_name
+        )
+
     def _insert_to_collection(self, collection_name: str, documents: List[Document]):
         print("collection_name => " + collection_name)
 
-        # 1. 텍스트 임베딩 생성 (이슈 #3: self.embedding_client 사용)
         texts = [doc.page_content for doc in documents]
         embeddings = self.embedding_client.embeddings.embed_documents(texts)
 
@@ -240,73 +207,30 @@ class RagGenerationService:
             for doc, emb in zip(documents, embeddings)
         ]
 
-        # 2. 컬렉션 존재 여부 확인 후 저장 (AGE는 CREATE로 항상 노드 추가)
         exists = self.vector_repository.collection_exists(collection_name)
         print("collection_exists => " + str(exists))
 
         self.vector_repository.save_documents(collection_name, docs_with_embeddings)
 
     def _test_input_data(self):
-
         test_dict = {
-            "1" : {
-                "service_name" : "개발자 랭킹 서비스",
-                "screen_name" : "깃허브 전체 랭킹목록 페이지",
-                "version" : "3.1.1",
-                "access_level" : "user"
-            },
-            "2" : {
-                "service_name" : "개발자 랭킹 서비스",
-                "screen_name" : "깃허브 랭킹 닉네임으로 유저 검색",
-                "version" : "3.1.1",
-                "access_level" : "user"
-            },
-            "3" : {
-                "service_name" : "개발자 랭킹 서비스",
-                "screen_name" : "백준 전체 랭킹 목록 페이지",
-                "version" : "3.1.1",
-                "access_level" : "user"
-            },
-            "4" : {
-                "service_name" : "개발자 랭킹 서비스",
-                "screen_name" : "다른 사용자와 랭킹정보 비교 페이지",
-                "version" : "3.1.1",
-                "access_level" : "user"
-            },
-            "5" : {
-                "service_name" : "개발자 랭킹 서비스",
-                "screen_name" : "레포지토리, 리드미 등 사용자 랭킹 정보 상세 조회 페이지",
-                "version" : "3.1.1",
-                "access_level" : "user"
-            },
-            "6" : {
-                "service_name" : "개발자 랭킹 서비스",
-                "screen_name" : "취업 공고를 통해 취업상태 등록 페이지",
-                "version" : "3.1.1",
-                "access_level" : "user"
-            },
-            "7" : {
-                "service_name" : "개발자 랭킹 서비스",
-                "screen_name" : "현재 취업 상태 관리 페이지",
-                "version" : "3.1.1",
-                "access_level" : "user"
-            },
-            "8" : {
-                "service_name" : "개발자 랭킹 서비스",
-                "screen_name" : "공고에 지원한 타 유저 및 평균조회 페이지",
-                "version" : "3.1.1",
-                "access_level" : "user"
-            }
+            "1": {"service_name": "개발자 랭킹 서비스", "screen_name": "깃허브 전체 랭킹목록 페이지", "version": "3.1.1", "access_level": "user"},
+            "2": {"service_name": "개발자 랭킹 서비스", "screen_name": "깃허브 랭킹 닉네임으로 유저 검색", "version": "3.1.1", "access_level": "user"},
+            "3": {"service_name": "개발자 랭킹 서비스", "screen_name": "백준 전체 랭킹 목록 페이지", "version": "3.1.1", "access_level": "user"},
+            "4": {"service_name": "개발자 랭킹 서비스", "screen_name": "다른 사용자와 랭킹정보 비교 페이지", "version": "3.1.1", "access_level": "user"},
+            "5": {"service_name": "개발자 랭킹 서비스", "screen_name": "레포지토리, 리드미 등 사용자 랭킹 정보 상세 조회 페이지", "version": "3.1.1", "access_level": "user"},
+            "6": {"service_name": "개발자 랭킹 서비스", "screen_name": "취업 공고를 통해 취업상태 등록 페이지", "version": "3.1.1", "access_level": "user"},
+            "7": {"service_name": "개발자 랭킹 서비스", "screen_name": "현재 취업 상태 관리 페이지", "version": "3.1.1", "access_level": "user"},
+            "8": {"service_name": "개발자 랭킹 서비스", "screen_name": "공고에 지원한 타 유저 및 평균조회 페이지", "version": "3.1.1", "access_level": "user"},
         }
-
         return test_dict
 
-    def _create_image_url(self, filename, base64_image):
+    def _create_image_url(self, filename: str, base64_image: str) -> str:
         if filename.lower().endswith('.png'):
             return f"data:image/png;base64,{base64_image}"
         elif filename.lower().endswith('.webp'):
             return f"data:image/webp;base64,{base64_image}"
-        else:  # jpg, jpeg 등
+        else:
             return f"data:image/jpeg;base64,{base64_image}"
 
     def _delete_code_block(self, sql_response: str) -> str:
@@ -316,66 +240,45 @@ class RagGenerationService:
             sql_response = sql_response[:-3]
         return sql_response.strip()
 
-    # 이슈 #4: _response_llm_data + _response_llm_data2 통합
-    def _call_llm_with_image(self, data_item: Dict[str, str]) -> Dict[str, str]:
-        """이미지 기반 LLM 호출 (generation_rag, add_rag_data 공통 사용)
-        data_item 필수 키: service_name, screen_name, version, access_level, filename, image
-        """
+    async def _call_llm_with_image(self, data_item: Dict[str, str]) -> Dict[str, str]:
+        """이미지 기반 LLM 호출 (generation_rag, add_rag_data 공통 사용)"""
         prompt = ChatPromptTemplate.from_messages([
             ("system", app_analysis_prompt_system),
             ("user", app_analysis_prompt_user)
         ])
-
         formatted_messages = prompt.format_messages(
             service_name=data_item['service_name'],
             screen_name=data_item['screen_name'],
             version=data_item['version'],
             access_level=data_item['access_level'],
         )
-
         user_message = formatted_messages[-1]
         user_message.content = [
-            {
-                "type": "text",
-                "text": user_message.content
-            },
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": self._create_image_url(data_item['filename'], data_item['image'])
-                }
-            }
+            {"type": "text", "text": user_message.content},
+            {"type": "image_url", "image_url": {"url": self._create_image_url(data_item['filename'], data_item['image'])}}
         ]
-
         response = self._delete_code_block(
-            self.llm_client.llm_request(formatted_messages)
+            await self.llm_client.async_llm_request(formatted_messages)
         )
-
         return json.loads(response)
 
-    def _response_llm_text_data(self, data_item: Dict[str, str]) -> Dict[str, str]:
+    async def _response_llm_text_data(self, data_item: Dict[str, str]) -> Dict[str, str]:
+        """텍스트 기반 LLM 호출 (add_rag_text_data 사용)"""
         prompt = ChatPromptTemplate.from_messages([
             ("system", app_analysis_prompt_system),
             ("user", app_analysis_prompt_user)
         ])
-
         formatted_messages = prompt.format_messages(
             service_name=data_item['service_name'],
             screen_name=data_item['screen_name'],
             version=data_item['version'],
             access_level=data_item['access_level'],
         )
-
         user_message = formatted_messages[-1]
         user_message.content = [
-            {
-                "type": "text",
-                "text": user_message.content + "\n\n[화면 설명]\n" + data_item['text_content']
-            }
+            {"type": "text", "text": user_message.content + "\n\n[화면 설명]\n" + data_item['text_content']}
         ]
-
         response = self._delete_code_block(
-            self.llm_client.llm_request(formatted_messages)
+            await self.llm_client.async_llm_request(formatted_messages)
         )
-
         return json.loads(response)

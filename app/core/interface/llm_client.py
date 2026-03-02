@@ -5,3 +5,7 @@ class LlmClient(ABC):
     @abstractmethod
     def llm_request(self, prompt) -> str:
         pass
+
+    @abstractmethod
+    async def async_llm_request(self, prompt) -> str:
+        pass

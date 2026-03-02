@@ -23,3 +23,13 @@ class RagRepository(ABC):
     def collection_exists(self, collection_name: str) -> bool:
         """컬렉션(그래프)의 존재 여부를 확인합니다."""
         pass
+
+    @abstractmethod
+    def get_screens_by_service(self, service_name: str, version: Optional[str] = None) -> List[Dict[str, Any]]:
+        """서비스에 속한 화면 노드 전체를 AGE 그래프에서 조회합니다."""
+        pass
+
+    @abstractmethod
+    def get_related_screens(self, collection_name: str, screen_name: str) -> List[Dict[str, Any]]:
+        """같은 서비스에 속한 연관 화면 노드를 AGE 그래프에서 조회합니다."""
+        pass
