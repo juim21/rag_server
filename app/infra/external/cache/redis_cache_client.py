@@ -45,6 +45,9 @@ class RedisCacheClient(CacheClient):
         except Exception as e:
             logger.warning(f"[Cache] DELETE_PATTERN 실패 pattern={pattern}: {e}")
 
+    async def ping(self) -> bool:
+        return await self._redis.ping()
+
     async def close(self):
         await self._redis.aclose()
 
@@ -60,3 +63,6 @@ class NullCacheClient(CacheClient):
 
     async def delete_pattern(self, pattern: str):
         pass
+
+    async def ping(self) -> bool:
+        return True

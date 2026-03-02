@@ -4,6 +4,7 @@ import json
 import base64
 from typing import List, Dict
 
+import structlog
 from starlette.datastructures import FormData
 from langchain.prompts import ChatPromptTemplate
 from langchain_core.documents import Document
@@ -14,6 +15,13 @@ from app.core.interface.llm_client import LlmClient
 from app.core.interface.cache_client import CacheClient
 from app.core.service.data_extractor import ImageExtractor
 from app.config.prompt import app_analysis_prompt_user, app_analysis_prompt_system
+from app.infra.monitoring.metrics import (
+    cache_hits, cache_misses,
+    llm_requests, embedding_requests,
+    search_latency,
+)
+
+logger = structlog.get_logger()
 
 _CACHE_TTL = 3600  # 1시간
 
@@ -62,13 +70,12 @@ class RagGenerationService:
         result = []
         for r in results_raw:
             if isinstance(r, Exception):
-                print(f"❌ 처리 실패: {r}")
+                logger.error("llm_image_failed", error=str(r))
             else:
                 result.append(r)
 
         application_docuement_list = self.imageExtractor.create_column_document(result)
-        print(application_docuement_list)
-        print("test => " + collection_name)
+        logger.info("generation_rag", collection_name=collection_name, doc_count=len(application_docuement_list))
 
         await asyncio.to_thread(self._insert_to_collection, collection_name, application_docuement_list)
 
@@ -98,13 +105,13 @@ class RagGenerationService:
             if isinstance(r, Exception):
                 error_type = type(r).__name__
                 if "OpenAI" in error_type or "API" in str(r):
-                    print(f"❌ API 에러: {str(r)[:150]}...")
+                    logger.error("add_rag_data_api_error", error=str(r)[:150])
                 elif "JSON" in str(r):
-                    print(f"❌ JSON 파싱 에러: {str(r)[:100]}...")
+                    logger.error("add_rag_data_json_error", error=str(r)[:100])
                 elif "timeout" in str(r).lower():
-                    print(f"❌ 타임아웃 에러")
+                    logger.error("add_rag_data_timeout")
                 else:
-                    print(f"❌ {error_type}: {str(r)[:100]}...")
+                    logger.error("add_rag_data_error", error_type=error_type, error=str(r)[:100])
             else:
                 result.append(r)
 
@@ -137,13 +144,13 @@ class RagGenerationService:
             if isinstance(r, Exception):
                 error_type = type(r).__name__
                 if "OpenAI" in error_type or "API" in str(r):
-                    print(f"❌ API 에러: {str(r)[:150]}...")
+                    logger.error("add_rag_text_api_error", error=str(r)[:150])
                 elif "JSON" in str(r):
-                    print(f"❌ JSON 파싱 에러: {str(r)[:100]}...")
+                    logger.error("add_rag_text_json_error", error=str(r)[:100])
                 elif "timeout" in str(r).lower():
-                    print(f"❌ 타임아웃 에러")
+                    logger.error("add_rag_text_timeout")
                 else:
-                    print(f"❌ {error_type}: {str(r)[:100]}...")
+                    logger.error("add_rag_text_error", error_type=error_type, error=str(r)[:100])
             else:
                 result.append(r)
 
@@ -158,18 +165,27 @@ class RagGenerationService:
 
         cached = await self.cache_client.get(cache_key)
         if cached is not None:
+            cache_hits.labels(collection=collection_name).inc()
+            logger.info("search_cache_hit", collection_name=collection_name, search_mode=search_mode)
             return json.loads(cached)
+        cache_misses.labels(collection=collection_name).inc()
 
         # 재랭킹 사용 시 충분한 후보를 오버패치
         fetch_k = k * 3 if rerank else k
+        embedding_requests.inc()
         query_embedding = await asyncio.to_thread(
             self.embedding_client.embeddings.embed_query, query
         )
-        results = await asyncio.to_thread(
-            self.vector_repository.similarity_search,
-            collection_name, query_embedding, fetch_k, filters,
-            search_mode, query if search_mode == "hybrid" else None
-        )
+
+        with search_latency.labels(search_mode=search_mode).time():
+            results = await asyncio.to_thread(
+                self.vector_repository.similarity_search,
+                collection_name, query_embedding, fetch_k, filters,
+                search_mode, query if search_mode == "hybrid" else None
+            )
+
+        logger.info("search_rag", collection_name=collection_name, query=query,
+                    k=k, search_mode=search_mode, rerank=rerank, result_count=len(results))
 
         if rerank and results and self.rerank_client:
             docs = [r[0]["page_content"] for r in results]
@@ -191,9 +207,11 @@ class RagGenerationService:
         """
         from app.config.prompt import code_summary_prompt, code_impact_prompt
 
+        llm_requests.inc()
         summary_prompt = code_summary_prompt.format(code=code)
         code_summary = await self.llm_client.async_llm_request(summary_prompt)
 
+        embedding_requests.inc()
         query_embedding = await asyncio.to_thread(
             self.embedding_client.embeddings.embed_query, code_summary
         )
@@ -207,8 +225,12 @@ class RagGenerationService:
             for i, (doc, score) in enumerate(related)
         ])
 
+        llm_requests.inc()
         impact_prompt = code_impact_prompt.format(code=code, screens=screens_text if screens_text else "관련 화면 없음")
         analysis = await self.llm_client.async_llm_request(impact_prompt)
+
+        logger.info("analyze_code_impact", collection_name=collection_name,
+                    k=k, related_count=len(related))
 
         return {
             "related_screens": related,
@@ -245,9 +267,11 @@ class RagGenerationService:
         return result
 
     def _insert_to_collection(self, collection_name: str, documents: List[Document]):
-        print("collection_name => " + collection_name)
+        logger.info("insert_to_collection_start", collection_name=collection_name,
+                    doc_count=len(documents))
 
         texts = [doc.page_content for doc in documents]
+        embedding_requests.inc()
         embeddings = self.embedding_client.embeddings.embed_documents(texts)
 
         docs_with_embeddings = [
@@ -260,7 +284,8 @@ class RagGenerationService:
         ]
 
         exists = self.vector_repository.collection_exists(collection_name)
-        print("collection_exists => " + str(exists))
+        logger.info("insert_to_collection", collection_name=collection_name,
+                    collection_exists=exists)
 
         self.vector_repository.save_documents(collection_name, docs_with_embeddings)
 
@@ -294,6 +319,7 @@ class RagGenerationService:
 
     async def _call_llm_with_image(self, data_item: Dict[str, str]) -> Dict[str, str]:
         """이미지 기반 LLM 호출 (generation_rag, add_rag_data 공통 사용)"""
+        llm_requests.inc()
         prompt = ChatPromptTemplate.from_messages([
             ("system", app_analysis_prompt_system),
             ("user", app_analysis_prompt_user)
@@ -316,6 +342,7 @@ class RagGenerationService:
 
     async def _response_llm_text_data(self, data_item: Dict[str, str]) -> Dict[str, str]:
         """텍스트 기반 LLM 호출 (add_rag_text_data 사용)"""
+        llm_requests.inc()
         prompt = ChatPromptTemplate.from_messages([
             ("system", app_analysis_prompt_system),
             ("user", app_analysis_prompt_user)

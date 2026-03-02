@@ -11,6 +11,12 @@ class AgeRepositoryImpl(RagRepository):
         self.graph_name = 'biz_rag_graph'  # init-db.sh에서 생성한 그래프 이름
         self.connection_manager.ensure_vector_table()  # pgvector 테이블 자동 생성
 
+    def health_check(self) -> bool:
+        """DB 연결 상태를 확인합니다. SELECT 1 쿼리로 실제 연결 검증."""
+        with self.connection_manager.get_cursor() as cursor:
+            cursor.execute("SELECT 1")
+        return True
+
     def _execute_cypher(self, query: str, cypher_params: dict = None):
         """Cypher 쿼리를 실행하는 도우미 함수.
         호출마다 커넥션 풀에서 커넥션을 체크아웃하고, 완료 후 자동 반납합니다.

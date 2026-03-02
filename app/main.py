@@ -1,23 +1,42 @@
+import logging
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.api.rag_controller import router as rag_router
 from dotenv import load_dotenv
 
-load_dotenv() 
+load_dotenv()
+
+import structlog
+
+
+def configure_logging():
+    structlog.configure(
+        processors=[
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.add_logger_name,
+            structlog.processors.TimeStamper(fmt="iso"),
+            structlog.processors.JSONRenderer(),
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+        logger_factory=structlog.PrintLoggerFactory(),
+    )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 🚀 애플리케이션 시작 시 실행
-    print("애플리케이션 시작 - 의존성 주입 설정")
+    configure_logging()
+    logger = structlog.get_logger()
+    logger.info("application_start", message="의존성 주입 설정")
     setup_dependencies()
     yield
-    # 🔒 애플리케이션 종료 시 실행  
-    print("애플리케이션 종료 - 리소스 정리")
-    cleanup_resources() 
+    logger.info("application_stop", message="리소스 정리")
+    cleanup_resources()
 
 
-app = FastAPI(title="RAG SQL API", version="1.0.0",lifespan=lifespan)
+app = FastAPI(title="RAG SQL API", version="1.0.0", lifespan=lifespan)
+
+from prometheus_fastapi_instrumentator import Instrumentator
+Instrumentator().instrument(app).expose(app)
 
 
 def setup_dependencies():
@@ -49,17 +68,12 @@ def setup_dependencies():
         DIContainer.register(CacheClient, NullCacheClient())
 
     DIContainer.register(RagGenerationService, RagGenerationService())
-    
-    
+
 
 def cleanup_resources():
     ## TODO : 디비 정리등 리소스 정리를 만들어야 함.
     pass
-    
+
 
 # 라우터 등록
-## TODO : rag의 경우에는 이미지를 입력 받아서 기존 구축된 rag에 추가하는 기능 제공 피룡.
 app.include_router(rag_router, prefix="/api/rag", tags=["RAG"])
-
-
-

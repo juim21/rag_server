@@ -33,3 +33,8 @@ class RagRepository(ABC):
     def get_related_screens(self, collection_name: str, screen_name: str) -> List[Dict[str, Any]]:
         """같은 서비스에 속한 연관 화면 노드를 AGE 그래프에서 조회합니다."""
         pass
+
+    @abstractmethod
+    def health_check(self) -> bool:
+        """DB 연결 상태를 확인합니다. 정상이면 True."""
+        pass

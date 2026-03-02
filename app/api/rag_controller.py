@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from typing import Optional
@@ -124,5 +125,25 @@ async def get_related_screens(collection_name: str, screen_name: str) -> JSONRes
 
 @router.get("/health")
 async def health_check():
-    """서비스 상태 확인"""
-    return {"status": "healthy", "service": "rag-generation"}
+    """서비스 상태 확인 - DB 및 Redis 실제 연결 상태 반환"""
+    from app.core.interface import RagRepository
+    from app.core.interface.cache_client import CacheClient
+
+    checks = {"status": "ok", "db": "ok", "redis": "ok"}
+
+    try:
+        repo = DIContainer.get(RagRepository)
+        await asyncio.to_thread(repo.health_check)
+    except Exception as e:
+        checks["db"] = f"error: {str(e)[:80]}"
+        checks["status"] = "degraded"
+
+    try:
+        cache = DIContainer.get(CacheClient)
+        await cache.ping()
+    except Exception as e:
+        checks["redis"] = f"error: {str(e)[:80]}"
+        checks["status"] = "degraded"
+
+    status_code = 200 if checks["status"] == "ok" else 503
+    return JSONResponse(content=checks, status_code=status_code)

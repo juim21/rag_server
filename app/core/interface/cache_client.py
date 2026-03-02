@@ -18,3 +18,8 @@ class CacheClient(ABC):
     async def delete_pattern(self, pattern: str):
         """패턴에 매칭되는 모든 키를 삭제합니다."""
         pass
+
+    @abstractmethod
+    async def ping(self) -> bool:
+        """캐시 연결 상태를 확인합니다. 정상이면 True."""
+        pass

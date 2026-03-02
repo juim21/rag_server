@@ -41,6 +41,8 @@ sqlalchemy==2.0.35
 
 # 로깅 및 모니터링
 structlog==24.4.0
+prometheus-client>=0.20.0
+prometheus-fastapi-instrumentator>=7.0.0
 
 
 ###개발용 의존성(테스트 등)
