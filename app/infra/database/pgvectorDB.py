@@ -35,24 +35,33 @@ class PGVectorManager:
     EMBEDDING_DIM = 3072  # gemini-embedding-001
 
     def ensure_vector_table(self):
-        """rag_embeddings 테이블과 인덱스가 없으면 생성합니다. 앱 시작 시 1회 호출."""
+        """rag_embeddings 테이블과 인덱스가 없으면 생성합니다. 앱 시작 시 1회 호출.
+        embedding 타입: halfvec(3072) — float16 저장으로 메모리 50% 절약, HNSW 인덱스 지원(pgvector 0.7.0+)
+        """
         with self.get_cursor() as cursor:
+            # halfvec 타입으로 테이블 생성 (신규)
             cursor.execute(f"""
                 CREATE TABLE IF NOT EXISTS rag_embeddings (
                     id BIGSERIAL PRIMARY KEY,
                     collection_name TEXT NOT NULL,
                     content TEXT NOT NULL,
                     metadata JSONB,
-                    embedding vector({self.EMBEDDING_DIM}),
+                    embedding halfvec({self.EMBEDDING_DIM}),
                     content_tsv TSVECTOR
                 );
+            """)
+            # 기존 vector(3072) 컬럼을 halfvec(3072)으로 마이그레이션 (이미 halfvec이면 무시됨)
+            cursor.execute(f"""
+                ALTER TABLE rag_embeddings
+                ALTER COLUMN embedding TYPE halfvec({self.EMBEDDING_DIM})
+                USING embedding::halfvec;
             """)
             # collection_name 필터 인덱스
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS rag_embeddings_collection_idx
                 ON rag_embeddings (collection_name);
             """)
-            # 기존 테이블에 content_tsv 컬럼이 없을 경우 추가 (인덱스 생성 전에 실행)
+            # 기존 테이블에 content_tsv 컬럼이 없을 경우 추가
             cursor.execute("""
                 ALTER TABLE rag_embeddings
                 ADD COLUMN IF NOT EXISTS content_tsv TSVECTOR;
@@ -62,8 +71,12 @@ class PGVectorManager:
                 CREATE INDEX IF NOT EXISTS rag_embeddings_tsv_idx
                 ON rag_embeddings USING GIN (content_tsv);
             """)
-            # 주의: pgvector의 ivfflat/hnsw 인덱스는 최대 2000차원까지만 지원
-            # gemini-embedding-001은 3072차원이므로 인덱스 없이 순차 검색(exact NN) 사용
+            # halfvec HNSW 인덱스 — 코사인 유사도 기준 ANN 검색 (O(log n))
+            # halfvec은 최대 16000차원까지 hnsw/ivfflat 인덱스 지원 (vector는 2000차원 제한)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS rag_embeddings_embedding_hnsw_idx
+                ON rag_embeddings USING hnsw (embedding halfvec_cosine_ops);
+            """)
 
     def insert_embedding(self, collection_name: str, content: str, metadata: dict, embedding: list):
         """pgvector 테이블에 임베딩과 콘텐츠를 삽입합니다. content_tsv도 자동 생성합니다."""
@@ -71,7 +84,7 @@ class PGVectorManager:
         with self.get_cursor() as cursor:
             cursor.execute(
                 """INSERT INTO rag_embeddings (collection_name, content, metadata, embedding, content_tsv)
-                   VALUES (%s, %s, %s, %s, to_tsvector('simple', %s))""",
+                   VALUES (%s, %s, %s, %s::halfvec, to_tsvector('simple', %s))""",
                 (collection_name, content, json.dumps(metadata), embedding, content)
             )
 
@@ -103,10 +116,10 @@ class PGVectorManager:
         params = [query_embedding, collection_name] + filter_params + [query_embedding, k]
 
         sql = f"""
-            SELECT content, metadata, 1 - (embedding <=> %s::vector) AS score
+            SELECT content, metadata, 1 - (embedding <=> %s::halfvec) AS score
             FROM rag_embeddings
             WHERE {where_clause}
-            ORDER BY embedding <=> %s::vector
+            ORDER BY embedding <=> %s::halfvec
             LIMIT %s
         """
         with self.get_cursor() as cursor:
@@ -130,10 +143,10 @@ class PGVectorManager:
         sql = f"""
             WITH vector_ranks AS (
                 SELECT id, content, metadata,
-                       ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector) AS rank
+                       ROW_NUMBER() OVER (ORDER BY embedding <=> %s::halfvec) AS rank
                 FROM rag_embeddings
                 WHERE {where_clause}
-                ORDER BY embedding <=> %s::vector
+                ORDER BY embedding <=> %s::halfvec
                 LIMIT %s
             ),
             keyword_ranks AS (
