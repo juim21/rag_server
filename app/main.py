@@ -8,24 +8,22 @@ load_dotenv()
 
 import structlog
 
+# 모듈 로드 시점에 즉시 설정 (lifespan 이전, 모든 import 완료 후)
+structlog.configure(
+    processors=[
+        structlog.stdlib.add_log_level,
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.JSONRenderer(),
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
+    logger_factory=structlog.PrintLoggerFactory(),
+)
 
-def configure_logging():
-    structlog.configure(
-        processors=[
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.add_logger_name,
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.JSONRenderer(),
-        ],
-        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-        logger_factory=structlog.PrintLoggerFactory(),
-    )
+logger = structlog.get_logger()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    configure_logging()
-    logger = structlog.get_logger()
     logger.info("application_start", message="의존성 주입 설정")
     setup_dependencies()
     yield
