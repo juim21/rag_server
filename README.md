@@ -46,7 +46,7 @@ FastAPI (rag_controller)
 | `core/service/` | 비즈니스 로직 (이미지 분석, 임베딩, 저장/검색 흐름) |
 | `infra/database/` | PostgreSQL 연결풀 관리 (SQLAlchemy + QueuePool) |
 | `infra/repository/` | RagRepository 구현체 (Apache AGE Cypher 기반) |
-| `infra/external/` | OpenAI LLM·임베딩 클라이언트 (싱글톤) |
+| `infra/external/` | Google LLM·임베딩 클라이언트 (싱글톤) |
 | `config/` | DB 설정, LLM 프롬프트 |
 | `di_container.py` | 경량 DI 컨테이너 (인터페이스 → 구현체 매핑) |
 
@@ -121,9 +121,9 @@ Content-Type: application/json
 
 **처리 흐름**
 1. `test_images/` 디렉토리에서 이미지를 base64로 읽음
-2. ThreadPoolExecutor (max_workers=5)로 GPT-4o Vision 병렬 분석
+2. ThreadPoolExecutor (max_workers=5)로 Gemini 2.5 Flash Vision 병렬 분석
 3. 분석 결과를 LangChain Document로 변환
-4. OpenAI 임베딩 생성 후 Apache AGE 그래프 노드로 저장
+4. gemini-embedding-001 임베딩 생성 후 Apache AGE 그래프 노드 + pgvector 테이블에 저장
 
 ---
 
@@ -165,7 +165,7 @@ text_content:    화면 설명 텍스트 (배열)
 
 ### POST `/api/rag/search`
 
-저장된 데이터에서 쿼리와 가장 유사한 화면 정보를 검색합니다.
+저장된 데이터에서 쿼리와 가장 유사한 화면 정보를 검색합니다. 순수 벡터 검색과 하이브리드 검색(BM25 + 벡터 RRF) 두 가지 모드를 지원합니다.
 
 ```http
 POST /api/rag/search
@@ -174,9 +174,19 @@ Content-Type: application/json
 {
     "collection_name": "my_collection",
     "query": "검색 버튼이 있는 랭킹 목록 화면",
-    "k": 5
+    "k": 5,
+    "search_mode": "vector",
+    "filters": {"service_name": "개발자 랭킹 서비스", "access_level": "user"}
 }
 ```
+
+| 파라미터 | 타입 | 기본값 | 설명 |
+|----------|------|--------|------|
+| `collection_name` | string | 필수 | 검색할 컬렉션명 |
+| `query` | string | 필수 | 검색 쿼리 |
+| `k` | int | 5 | 반환할 결과 수 |
+| `search_mode` | string | `"vector"` | `"vector"` (순수 벡터) \| `"hybrid"` (벡터+BM25 RRF) |
+| `filters` | object | null | JSONB 메타데이터 필터 (예: `{"service_name": "서비스명"}`) |
 
 **응답 예시**
 ```json
@@ -192,6 +202,43 @@ Content-Type: application/json
             "score": 0.9123
         }
     ]
+}
+```
+
+---
+
+### POST `/api/rag/analyze/code`
+
+소스코드를 분석하여 영향받는 화면을 탐지하고 테스트 영향도 리포트를 생성합니다.
+
+```http
+POST /api/rag/analyze/code
+Content-Type: application/json
+
+{
+    "collection_name": "my_collection",
+    "code": "def authenticate_user(username, password):\n    ...",
+    "k": 5,
+    "filters": {"service_name": "인증 서비스"}
+}
+```
+
+**처리 흐름**
+1. LLM으로 코드 기능 요약
+2. 요약 텍스트 임베딩 → RAG 검색으로 관련 화면 탐색
+3. LLM으로 영향도 분석 리포트 생성
+
+**응답 예시**
+```json
+{
+    "related_screens": [
+        {
+            "content": "로그인 화면 분석...",
+            "metadata": {"screen_name": "로그인", "service_name": "인증 서비스"},
+            "score": 0.7688
+        }
+    ],
+    "analysis": "## 영향 화면\n- 로그인 화면 (우선순위: 높음)\n- 회원가입 화면 (우선순위: 중간)\n\n## 테스트 항목\n..."
 }
 ```
 
@@ -340,10 +387,14 @@ service = DIContainer.get(RagGenerationService)
 ## 주요 설계 결정사항
 
 - **그래프 저장**: Apache AGE Cypher 쿼리로 `Screen` 노드와 `Service` 노드를 생성하고 `BELONGS_TO` 관계로 연결
-- **병렬 처리**: 다수의 이미지를 분석할 때 `ThreadPoolExecutor(max_workers=5)`로 OpenAI API 요청을 병렬 처리
+- **이중 저장 구조**: AGE 그래프(관계 저장) + pgvector `rag_embeddings` 테이블(임베딩 저장) 역할 분리
+- **병렬 처리**: 다수의 이미지를 분석할 때 `ThreadPoolExecutor(max_workers=5)`로 Gemini API 요청을 병렬 처리
 - **싱글톤 클라이언트**: `GoogleChatClient`, `GoogleEmbeddingClient`, `PGVectorManager` 모두 클래스 변수로 단일 인스턴스 유지
 - **수동 임베딩**: Apache AGE는 LangChain의 임베딩 자동 처리를 지원하지 않으므로 `embed_documents()` / `embed_query()`를 직접 호출
-- **코사인 유사도 검색**: AGE 내장 벡터 검색 미지원으로 Python에서 직접 코사인 유사도 계산 후 상위 k개 반환
+- **DB 레벨 벡터 검색**: pgvector `<=>` 코사인 거리 연산자로 DB에서 직접 검색 (3072차원 → ivfflat/hnsw 인덱스 불가, 순차 검색 사용)
+- **하이브리드 검색**: tsvector + GIN 인덱스로 BM25 키워드 검색, RRF(Reciprocal Rank Fusion)로 벡터 결과와 결합
+- **AGE Cypher 파라미터 바인딩**: `$param` 방식 + JSON 직렬화로 LLM 생성 텍스트의 특수문자·따옴표 안전 처리
+- **커넥션 풀 안전성**: `@contextmanager` 기반 `get_cursor()`로 자동 commit/rollback/반납 (멀티스레드 안전)
 
 ---
 
@@ -391,11 +442,48 @@ curl -X POST http://localhost:8000/api/rag/search \
 # Response: {"results": [...]} (score: 0.7863)
 ```
 
+### 하이브리드 검색
+
+```bash
+curl -X POST http://localhost:8000/api/rag/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "collection_name": "my_collection",
+    "query": "로그인 화면",
+    "k": 3,
+    "search_mode": "hybrid"
+  }'
+# hybrid 모드 RRF score 예시: login(0.0328), signup(0.0161)
+```
+
+### 소스코드 영향도 분석
+
+```bash
+curl -X POST http://localhost:8000/api/rag/analyze/code \
+  -H "Content-Type: application/json" \
+  -d '{
+    "collection_name": "my_collection",
+    "code": "def authenticate_user(username, password):\n    user = db.query(User).filter(User.username == username).first()\n    if not user or not verify_password(password, user.hashed_password):\n        raise HTTPException(status_code=401)\n    return user",
+    "k": 5
+  }'
+# Response: {"related_screens": [...], "analysis": "## 영향 화면\n- 로그인 화면 (우선순위: 높음)..."}
+```
+
 ---
+
+## 고도화 이력
+
+| 단계 | 내용 | 상태 |
+|------|------|------|
+| 1단계 | `@contextmanager` 기반 커넥션 풀 안전 관리 | ✅ 완료 |
+| 2단계 | pgvector `rag_embeddings` 테이블 + DB 레벨 코사인 검색 | ✅ 완료 |
+| 3단계 | JSONB `@>` 메타데이터 필터 검색 | ✅ 완료 |
+| 4단계 | `POST /api/rag/analyze/code` 소스코드 영향도 분석 API | ✅ 완료 |
+| 5단계 | 하이브리드 검색 (BM25 tsvector + pgvector RRF) | ✅ 완료 |
 
 ## 향후 개선 계획
 
 - `asyncio` 기반 비동기 처리로 전환 (현재 ThreadPoolExecutor 사용)
-- 메타데이터 필터링·복합 조건 검색 지원
-- AGE + pgvector 연동을 통한 네이티브 벡터 검색 적용
-- 소스코드 API 단위 분석 및 화면 매핑 RAG 구축
+- pgvector 인덱스 최적화 (3072차원 분해 또는 차원 축소 적용)
+- AGE 그래프 관계 기반 탐색 API (연관 서비스·화면 그래프 쿼리)
+- 검색 결과 재랭킹(Re-ranking) 모델 적용
