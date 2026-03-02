@@ -244,6 +244,55 @@ Content-Type: application/json
 
 ---
 
+### GET `/api/rag/graph/service/{service_name}`
+
+AGE 그래프에서 특정 서비스에 속한 화면 전체 목록을 조회합니다.
+
+```http
+GET /api/rag/graph/service/개발자%20랭킹%20서비스
+GET /api/rag/graph/service/개발자%20랭킹%20서비스?version=1.0.0
+```
+
+**응답 예시**
+```json
+{
+    "screens": [
+        {
+            "screen_name": "깃허브 전체 랭킹목록 페이지",
+            "content": "화면 분석 텍스트...",
+            "metadata": {"service_name": "개발자 랭킹 서비스", "version": "1.0.0", "access_level": "user"}
+        }
+    ],
+    "total": 4
+}
+```
+
+---
+
+### GET `/api/rag/graph/screen/{collection_name}/{screen_name}/related`
+
+AGE 그래프에서 지정한 화면과 같은 서비스에 속한 연관 화면을 조회합니다.
+
+```http
+GET /api/rag/graph/screen/my_collection/깃허브%20전체%20랭킹목록%20페이지/related
+```
+
+**응답 예시**
+```json
+{
+    "screens": [
+        {
+            "screen_name": "백준 전체 랭킹 목록 페이지",
+            "content": "화면 분석 텍스트...",
+            "metadata": {"service_name": "개발자 랭킹 서비스", "version": "1.0.0"}
+        }
+    ],
+    "total": 3
+}
+```
+
+---
+
 ### GET `/api/rag/health`
 
 ```http
@@ -388,7 +437,7 @@ service = DIContainer.get(RagGenerationService)
 
 - **그래프 저장**: Apache AGE Cypher 쿼리로 `Screen` 노드와 `Service` 노드를 생성하고 `BELONGS_TO` 관계로 연결
 - **이중 저장 구조**: AGE 그래프(관계 저장) + pgvector `rag_embeddings` 테이블(임베딩 저장) 역할 분리
-- **병렬 처리**: 다수의 이미지를 분석할 때 `ThreadPoolExecutor(max_workers=5)`로 Gemini API 요청을 병렬 처리
+- **비동기 병렬 처리**: `asyncio.gather()`로 다수 이미지·텍스트 LLM 분석을 동시 실행, DB/임베딩 동기 작업은 `asyncio.to_thread()`로 이벤트 루프 블로킹 방지
 - **싱글톤 클라이언트**: `GoogleChatClient`, `GoogleEmbeddingClient`, `PGVectorManager` 모두 클래스 변수로 단일 인스턴스 유지
 - **수동 임베딩**: Apache AGE는 LangChain의 임베딩 자동 처리를 지원하지 않으므로 `embed_documents()` / `embed_query()`를 직접 호출
 - **DB 레벨 벡터 검색**: pgvector `<=>` 코사인 거리 연산자로 DB에서 직접 검색 (3072차원 → ivfflat/hnsw 인덱스 불가, 순차 검색 사용)
@@ -469,6 +518,18 @@ curl -X POST http://localhost:8000/api/rag/analyze/code \
 # Response: {"related_screens": [...], "analysis": "## 영향 화면\n- 로그인 화면 (우선순위: 높음)..."}
 ```
 
+### 그래프 탐색
+
+```bash
+# 서비스에 속한 화면 전체 조회
+curl "http://localhost:8000/api/rag/graph/service/%EA%B0%9C%EB%B0%9C%EC%9E%90%20%EB%9E%AD%ED%82%B9%20%EC%84%9C%EB%B9%84%EC%8A%A4"
+# Response: {"screens": [...], "total": 4}
+
+# 특정 화면의 연관 화면 탐색
+curl "http://localhost:8000/api/rag/graph/screen/my_collection/%EA%B9%83%ED%97%88%EB%B8%8C%20%EC%A0%84%EC%B2%B4%20%EB%9E%AD%ED%82%B9%EB%AA%A9%EB%A1%9D%20%ED%8E%98%EC%9D%B4%EC%A7%80/related"
+# Response: {"screens": [...], "total": 3}
+```
+
 ---
 
 ## 고도화 이력
@@ -480,6 +541,8 @@ curl -X POST http://localhost:8000/api/rag/analyze/code \
 | 3단계 | JSONB `@>` 메타데이터 필터 검색 | ✅ 완료 |
 | 4단계 | `POST /api/rag/analyze/code` 소스코드 영향도 분석 API | ✅ 완료 |
 | 5단계 | 하이브리드 검색 (BM25 tsvector + pgvector RRF) | ✅ 완료 |
+| 6단계 | asyncio 비동기 처리 전환 (LLM 병렬 호출, to_thread 래핑) | ✅ 완료 |
+| 8단계 | AGE 그래프 탐색 API (서비스별 화면 목록 / 연관 화면 탐색) | ✅ 완료 |
 
 ## 향후 개선 계획
 
