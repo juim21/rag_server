@@ -187,6 +187,7 @@ Content-Type: application/json
 | `k` | int | 5 | 반환할 결과 수 |
 | `search_mode` | string | `"vector"` | `"vector"` (순수 벡터) \| `"hybrid"` (벡터+BM25 RRF) |
 | `filters` | object | null | JSONB 메타데이터 필터 (예: `{"service_name": "서비스명"}`) |
+| `rerank` | bool | `false` | `true`: 크로스인코더 재랭킹 적용 (k×3 오버패치 후 재정렬) |
 
 **응답 예시**
 ```json
@@ -442,6 +443,7 @@ service = DIContainer.get(RagGenerationService)
 - **수동 임베딩**: Apache AGE는 LangChain의 임베딩 자동 처리를 지원하지 않으므로 `embed_documents()` / `embed_query()`를 직접 호출
 - **halfvec + HNSW 인덱스**: 임베딩을 `halfvec(3072)` 타입(float16)으로 저장하여 메모리를 50% 절약하고 HNSW 인덱스(`halfvec_cosine_ops`) 지원. `vector(3072)`는 최대 2000차원까지만 hnsw/ivfflat 인덱스를 지원하지만 `halfvec`은 16000차원까지 지원하여 3072차원에서도 O(log n) ANN 검색 가능
 - **하이브리드 검색**: tsvector + GIN 인덱스로 BM25 키워드 검색, RRF(Reciprocal Rank Fusion)로 벡터 결과와 결합
+- **크로스인코더 재랭킹**: `rerank=true` 요청 시 k×3 결과를 오버패치한 뒤 `BAAI/bge-reranker-base` 크로스인코더로 재정렬. 바이인코더(임베딩 검색)는 속도 최적화된 근사 검색이지만, 크로스인코더는 쿼리-문서 쌍을 함께 인코딩하여 더 정밀한 관련도 판단 가능 (품질 ↑, 응답 시간 ↑ 트레이드오프)
 - **AGE Cypher 파라미터 바인딩**: `$param` 방식 + JSON 직렬화로 LLM 생성 텍스트의 특수문자·따옴표 안전 처리
 - **커넥션 풀 안전성**: `@contextmanager` 기반 `get_cursor()`로 자동 commit/rollback/반납 (멀티스레드 안전)
 
@@ -544,9 +546,9 @@ curl "http://localhost:8000/api/rag/graph/screen/my_collection/%EA%B9%83%ED%97%8
 | 6단계 | asyncio 비동기 처리 전환 (LLM 병렬 호출, to_thread 래핑) | ✅ 완료 |
 | 7단계 | `halfvec(3072)` 전환 + HNSW 인덱스 도입 (메모리 50% 절약, ANN 검색) | ✅ 완료 |
 | 8단계 | AGE 그래프 탐색 API (서비스별 화면 목록 / 연관 화면 탐색) | ✅ 완료 |
+| 9단계 | 크로스인코더 재랭킹 (`BAAI/bge-reranker-base`, `rerank=true` 선택 적용) | ✅ 완료 |
 
 ## 향후 개선 계획
 
-- 검색 결과 재랭킹(Re-ranking) 모델 적용 (9단계)
 - 멀티모달 임베딩 적용 (이미지 직접 임베딩)
 - AGE 그래프 심화 탐색 (다단계 관계 순회, 서비스 간 의존성 분석)
