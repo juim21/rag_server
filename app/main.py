@@ -21,18 +21,33 @@ app = FastAPI(title="RAG SQL API", version="1.0.0",lifespan=lifespan)
 
 
 def setup_dependencies():
+    import os
     from app.infra.repository.age_repository_impl import AgeRepositoryImpl
     from app.core.service.rag_generation_service import RagGenerationService
     from app.core.interface import RagRepository
     from app.core.interface.llm_client import LlmClient
     from app.core.interface.rerank_client import RerankClient
+    from app.core.interface.cache_client import CacheClient
     from app.infra.external.llm.google_client import GoogleChatClient
     from app.infra.external.rerank.cross_encoder_client import CrossEncoderClient
+    from app.infra.external.cache.redis_cache_client import RedisCacheClient, NullCacheClient
     from app.di_container import DIContainer
 
     DIContainer.register(RagRepository, AgeRepositoryImpl())
     DIContainer.register(LlmClient, GoogleChatClient())
     DIContainer.register(RerankClient, CrossEncoderClient())
+
+    redis_host = os.getenv("REDIS_HOST")
+    if redis_host:
+        DIContainer.register(CacheClient, RedisCacheClient(
+            host=redis_host,
+            port=int(os.getenv("REDIS_PORT", "6379")),
+            db=int(os.getenv("REDIS_DB", "0")),
+            password=os.getenv("REDIS_PASSWORD"),
+        ))
+    else:
+        DIContainer.register(CacheClient, NullCacheClient())
+
     DIContainer.register(RagGenerationService, RagGenerationService())
     
     

@@ -24,6 +24,15 @@ services:
     networks:
       - backend_network
 
+  # Redis 캐시
+  redis:
+    image: redis:7-alpine
+    container_name: backend_ai_redis
+    ports:
+      - "6379:6379"
+    networks:
+      - backend_network
+
   # FastAPI Application
   app:
     build:
@@ -49,11 +58,17 @@ services:
       VECTOR_DB_NAME: biz_rag
       VECTOR_DB_USER: postgres
       VECTOR_DB_PASSWORD: postgres
+
+      # Redis 캐시
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     volumes:
       - ./app:/testcase-doc-rag/app
     networks:

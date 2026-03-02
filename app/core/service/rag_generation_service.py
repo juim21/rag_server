@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import base64
 from typing import List, Dict
@@ -10,8 +11,18 @@ from langchain_core.documents import Document
 from app.di_container import DIContainer
 from app.core.interface import RagRepository
 from app.core.interface.llm_client import LlmClient
+from app.core.interface.cache_client import CacheClient
 from app.core.service.data_extractor import ImageExtractor
 from app.config.prompt import app_analysis_prompt_user, app_analysis_prompt_system
+
+_CACHE_TTL = 3600  # 1시간
+
+
+def _make_search_key(collection_name: str, query: str, k: int,
+                     search_mode: str, rerank: bool, filters: dict) -> str:
+    raw = f"{query}|{k}|{search_mode}|{rerank}|{json.dumps(filters, sort_keys=True)}"
+    digest = hashlib.md5(raw.encode()).hexdigest()
+    return f"rag:search:{collection_name}:{digest}"
 
 
 class RagGenerationService:
@@ -24,6 +35,7 @@ class RagGenerationService:
         self.vector_repository = DIContainer.get(RagRepository)
         self.llm_client = DIContainer.get(LlmClient)
         self.rerank_client = DIContainer.get(RerankClient)
+        self.cache_client: CacheClient = DIContainer.get(CacheClient)
         self.embedding_client = GoogleEmbeddingClient()
 
     # 대량의 데이터를 업로드 하는 방식 - 특정 디렉토리에 파일을 일괄로 저장 및 파일별 입력 데이터를 일괄로 업로드
@@ -98,6 +110,7 @@ class RagGenerationService:
 
         application_docuement_list = self.imageExtractor.create_column_document(result)
         await asyncio.to_thread(self._insert_to_collection, collection_name, application_docuement_list)
+        await self.cache_client.delete_pattern(f"rag:search:{collection_name}:*")
 
     # 기존에 있는 컬렉션에 텍스트 데이터 임베딩 (멀티파트 텍스트)
     async def add_rag_text_data(self, collection_name: str, formData: FormData):
@@ -136,10 +149,17 @@ class RagGenerationService:
 
         application_docuement_list = self.imageExtractor.create_column_document(result)
         await asyncio.to_thread(self._insert_to_collection, collection_name, application_docuement_list)
+        await self.cache_client.delete_pattern(f"rag:search:{collection_name}:*")
 
     async def search_rag(self, collection_name: str, query: str, k: int = 5,
                          filters: dict = None, search_mode: str = "vector",
                          rerank: bool = False):
+        cache_key = _make_search_key(collection_name, query, k, search_mode, rerank, filters or {})
+
+        cached = await self.cache_client.get(cache_key)
+        if cached is not None:
+            return json.loads(cached)
+
         # 재랭킹 사용 시 충분한 후보를 오버패치
         fetch_k = k * 3 if rerank else k
         query_embedding = await asyncio.to_thread(
@@ -158,6 +178,7 @@ class RagGenerationService:
             )
             results = [(results[idx][0], score) for idx, score in reranked_indices]
 
+        await self.cache_client.set(cache_key, json.dumps(results), _CACHE_TTL)
         return results
 
     async def analyze_code_impact(self, collection_name: str, code: str,
@@ -196,15 +217,32 @@ class RagGenerationService:
 
     async def get_screens_by_service(self, service_name: str, version: str = None) -> list:
         """AGE 그래프에서 서비스에 속한 화면 목록을 조회합니다."""
-        return await asyncio.to_thread(
+        v_key = version or "all"
+        cache_key = f"rag:graph:service:{service_name}:{v_key}"
+
+        cached = await self.cache_client.get(cache_key)
+        if cached is not None:
+            return json.loads(cached)
+
+        result = await asyncio.to_thread(
             self.vector_repository.get_screens_by_service, service_name, version
         )
+        await self.cache_client.set(cache_key, json.dumps(result), _CACHE_TTL)
+        return result
 
     async def get_related_screens(self, collection_name: str, screen_name: str) -> list:
         """AGE 그래프에서 같은 서비스의 연관 화면을 조회합니다."""
-        return await asyncio.to_thread(
+        cache_key = f"rag:graph:screen:{collection_name}:{screen_name}"
+
+        cached = await self.cache_client.get(cache_key)
+        if cached is not None:
+            return json.loads(cached)
+
+        result = await asyncio.to_thread(
             self.vector_repository.get_related_screens, collection_name, screen_name
         )
+        await self.cache_client.set(cache_key, json.dumps(result), _CACHE_TTL)
+        return result
 
     def _insert_to_collection(self, collection_name: str, documents: List[Document]):
         print("collection_name => " + collection_name)
