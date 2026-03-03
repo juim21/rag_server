@@ -21,5 +21,8 @@ jobs:
             echo "PAGOPAGO_TOKEN secret not set — skipping sync"
             exit 0
           fi
+          # actions/checkout이 설정한 GITHUB_TOKEN extraheader 제거
+          # 그대로 두면 PAGOPAGO_TOKEN 대신 GITHUB_TOKEN으로 push를 시도해 403 발생
+          git config --local --unset http.https://github.com/.extraheader || true
           git remote add pagopago https://x-access-token:${PAGOPAGO_TOKEN}@github.com/pagopago-crm/rag_server.git
           git push pagopago main:hyunbin_dev --force
