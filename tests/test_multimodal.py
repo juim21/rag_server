@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
-# --- 무거운 외부 모듈 사전 Mock ---
+# --- CI 환경에서 미설치 패키지 사전 Mock ---
 _MOCKS = [
     "langchain", "langchain.prompts",
     "langchain_core", "langchain_core.documents",
@@ -17,6 +17,11 @@ _MOCKS = [
     "langchain_openai.chat_models.azure",
     "sentence_transformers",
     "PIL", "PIL.Image",
+    # pgvectorDB.py 모듈 레벨 import 대응
+    "sqlalchemy",
+    "sqlalchemy.orm",
+    "sqlalchemy.pool",
+    "dotenv",
 ]
 for _m in _MOCKS:
     sys.modules.setdefault(_m, MagicMock())
@@ -49,43 +54,37 @@ class TestClipEmbeddingClientInterface:
         from app.infra.external.embedding.clip_embedding_client import ClipEmbeddingClient
         client = ClipEmbeddingClient()
 
+        fake_vector = [0.1] * 512
+        mock_array = MagicMock()
+        mock_array.tolist.return_value = fake_vector
+
         mock_model = MagicMock()
-        import numpy as np
-        mock_model.encode.return_value = [np.array([0.1] * 512)]
+        mock_model.encode.return_value = [mock_array]
         ClipEmbeddingClient._model = mock_model
 
         result = client.embed_text("로그인 화면")
         assert isinstance(result, list)
-        assert len(result) == 512
+        assert result == fake_vector
         mock_model.encode.assert_called_once_with(["로그인 화면"])
         ClipEmbeddingClient._model = None  # 초기화
 
     def test_clip_client_implements_embed_image_base64(self):
-        import base64, io
-        from PIL import Image as PILImage
+        import base64
         from app.infra.external.embedding.clip_embedding_client import ClipEmbeddingClient
         client = ClipEmbeddingClient()
 
+        fake_vector = [0.2] * 512
+        mock_array = MagicMock()
+        mock_array.tolist.return_value = fake_vector
+
         mock_model = MagicMock()
-        import numpy as np
-        mock_model.encode.return_value = [np.array([0.2] * 512)]
+        mock_model.encode.return_value = [mock_array]
         ClipEmbeddingClient._model = mock_model
 
-        # 가짜 base64 이미지 (1×1 흰 픽셀 PNG)
-        import struct, zlib
-        def make_png():
-            def chunk(name, data):
-                c = struct.pack('>I', len(data)) + name + data
-                return c + struct.pack('>I', zlib.crc32(name + data) & 0xffffffff)
-            ihdr = struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)
-            raw = b'\x00\xff\xff\xff'
-            idat = zlib.compress(raw)
-            return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', idat) + chunk(b'IEND', b'')
-        b64 = base64.b64encode(make_png()).decode()
-
+        b64 = base64.b64encode(b"fake_image_bytes").decode()
         result = client.embed_image_base64(b64)
         assert isinstance(result, list)
-        assert len(result) == 512
+        assert result == fake_vector
         ClipEmbeddingClient._model = None  # 초기화
 
 
