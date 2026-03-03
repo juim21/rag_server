@@ -62,6 +62,10 @@ services:
       # Redis 캐시
       REDIS_HOST: redis
       REDIS_PORT: 6379
+
+      # API 보안
+      API_KEYS: ${API_KEYS:-}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-60}
     ports:
       - "8000:8000"
     depends_on:

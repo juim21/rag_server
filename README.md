@@ -588,6 +588,7 @@ curl "http://localhost:8000/api/rag/graph/screen/my_collection/%EA%B9%83%ED%97%8
 | 10단계 | Redis 캐싱 레이어 도입 (TTL 1시간, SCAN 기반 무효화, NullCacheClient 하위 호환) | ✅ 완료 |
 | 11단계 | 모니터링 / 관찰가능성 (structlog JSON 로그, Prometheus 메트릭, `/health` 강화) | ✅ 완료 |
 | 12단계 | Grafana 대시보드 연동 (Prometheus + Grafana 컨테이너, RAG 전용 대시보드) | ✅ 완료 |
+| 13단계 | API 보안 강화 (X-API-Key 인증, Redis Rate Limiting, /health 공개 유지) | ✅ 완료 |
 
 ## 향후 개선 계획
 

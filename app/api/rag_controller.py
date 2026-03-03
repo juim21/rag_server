@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
 from typing import Optional
 
@@ -8,19 +8,22 @@ from app.di_container import DIContainer
 from app.api.model.response import RAGResponse, RAGSearchResponse
 from app.api.model.response.rag_response import RAGCodeAnalyzeResponse, GraphScreensResponse
 from app.api.model.request.rag_request import RAGRequest, RAGSearchRequest, RAGCodeAnalyzeRequest
-
+from app.core.middleware.security import verify_api_key, rate_limit
 
 router = APIRouter()
 
+# 인증 + Rate Limit을 묶은 공통 dependency
+_secured = [Depends(verify_api_key), Depends(rate_limit)]
 
-@router.post("/generation/vector", response_model=RAGResponse)
+
+@router.post("/generation/vector", response_model=RAGResponse, dependencies=_secured)
 async def generate_rag(request: RAGRequest) -> JSONResponse:
     ragGenService = DIContainer.get(RagGenerationService)
     await ragGenService.generation_rag(collection_name=request.collection_name)
     return JSONResponse(content={"result": "ok"})
 
 
-@router.post("/add/vector")
+@router.post("/add/vector", dependencies=_secured)
 async def add_rag(request: Request) -> JSONResponse:
     ragGenService = DIContainer.get(RagGenerationService)
     formData = await request.form()
@@ -31,7 +34,7 @@ async def add_rag(request: Request) -> JSONResponse:
     return JSONResponse(content={"result": "ok"})
 
 
-@router.post("/add/text")
+@router.post("/add/text", dependencies=_secured)
 async def add_rag_text(request: Request) -> JSONResponse:
     ragGenService = DIContainer.get(RagGenerationService)
     formData = await request.form()
@@ -42,7 +45,7 @@ async def add_rag_text(request: Request) -> JSONResponse:
     return JSONResponse(content={"result": "ok"})
 
 
-@router.post("/search", response_model=RAGSearchResponse)
+@router.post("/search", response_model=RAGSearchResponse, dependencies=_secured)
 async def search_rag(request: RAGSearchRequest) -> JSONResponse:
     ragGenService = DIContainer.get(RagGenerationService)
     results = await ragGenService.search_rag(
@@ -65,7 +68,7 @@ async def search_rag(request: RAGSearchRequest) -> JSONResponse:
     })
 
 
-@router.post("/analyze/code", response_model=RAGCodeAnalyzeResponse)
+@router.post("/analyze/code", response_model=RAGCodeAnalyzeResponse, dependencies=_secured)
 async def analyze_code(request: RAGCodeAnalyzeRequest) -> JSONResponse:
     """
     소스코드를 분석하여 영향받는 화면을 탐지하고 테스트 영향도 리포트를 생성합니다.
@@ -93,7 +96,7 @@ async def analyze_code(request: RAGCodeAnalyzeRequest) -> JSONResponse:
     })
 
 
-@router.get("/graph/service/{service_name}", response_model=GraphScreensResponse)
+@router.get("/graph/service/{service_name}", response_model=GraphScreensResponse, dependencies=_secured)
 async def get_screens_by_service(service_name: str, version: Optional[str] = None) -> JSONResponse:
     """
     AGE 그래프에서 서비스에 속한 화면 전체를 조회합니다.
@@ -108,7 +111,7 @@ async def get_screens_by_service(service_name: str, version: Optional[str] = Non
     })
 
 
-@router.get("/graph/screen/{collection_name}/{screen_name}/related", response_model=GraphScreensResponse)
+@router.get("/graph/screen/{collection_name}/{screen_name}/related", response_model=GraphScreensResponse, dependencies=_secured)
 async def get_related_screens(collection_name: str, screen_name: str) -> JSONResponse:
     """
     AGE 그래프에서 같은 서비스에 속한 연관 화면을 조회합니다.
@@ -125,7 +128,7 @@ async def get_related_screens(collection_name: str, screen_name: str) -> JSONRes
 
 @router.get("/health")
 async def health_check():
-    """서비스 상태 확인 - DB 및 Redis 실제 연결 상태 반환"""
+    """서비스 상태 확인 - DB 및 Redis 실제 연결 상태 반환 (인증 불필요)"""
     from app.core.interface import RagRepository
     from app.core.interface.cache_client import CacheClient
 
