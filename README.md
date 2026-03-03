@@ -658,8 +658,13 @@ tests/
 ### pagopago-crm 자동 동기화
 
 `main` 브랜치에 push되면 `pagopago-crm/rag_server:hyunbin_dev` 브랜치로 자동 force-push됩니다.
-동기화하려면 GitHub 저장소 Settings → Secrets에 `PAGOPAGO_TOKEN`을 등록하세요.
-시크릿이 없으면 워크플로가 자동으로 스킵됩니다.
+
+**PAGOPAGO_TOKEN 설정 방법**
+1. `juim21` 계정에서 Classic PAT 발급 (`repo` + `workflow` 두 스코프 필수)
+2. `juim21/rag_server` → Settings → Secrets → `PAGOPAGO_TOKEN` 등록
+3. 시크릿이 없으면 워크플로가 자동으로 스킵됩니다.
+
+> **구현 참고**: `actions/checkout@v4`가 자동으로 `http.https://github.com/.extraheader`에 `GITHUB_TOKEN`을 등록합니다. 이 설정이 모든 github.com URL에 적용되어 `PAGOPAGO_TOKEN`을 덮어쓰기 때문에, push 전 `git config --local --unset http.https://github.com/.extraheader`로 제거해야 합니다.
 
 ---
 
