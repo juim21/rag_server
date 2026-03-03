@@ -109,6 +109,28 @@ rag_server/
 
 ## API 엔드포인트
 
+### 인증 방식
+
+`API_KEYS` 설정 시 모든 엔드포인트(GET `/health` 제외)에 `X-API-Key` 헤더가 필요합니다.
+
+```http
+X-API-Key: {발급된 API 키}
+```
+
+| 응답 코드 | 의미 |
+|-----------|------|
+| `401` | 헤더 누락 |
+| `403` | 잘못된 키 |
+| `429` | Rate Limit 초과 (분당 `RATE_LIMIT_PER_MINUTE`회) |
+
+> **멀티테넌트 자동 격리**: `API_KEYS`를 `tenant:key` 형식으로 설정하면, 서버가 저장·검색 시 `collection_name` 앞에 tenant prefix를 자동으로 붙입니다. 클라이언트는 prefix 없이 `collection_name`만 전달하면 됩니다.
+>
+> 예) `API_KEYS=system01:key-aaa,system02:key-bbb`
+> system01이 `"screens"` 저장 → 내부 저장 키: `"system01:screens"`
+> system02가 `"screens"` 저장 → 내부 저장 키: `"system02:screens"` (완전 분리)
+
+---
+
 ### POST `/api/rag/generation/vector`
 
 `test_images/` 디렉토리의 이미지를 일괄 분석하여 그래프 저장합니다. (개발·테스트용)
@@ -403,6 +425,8 @@ cp .env.example .env
 | `REDIS_PORT` | Redis 포트 | `6379` |
 | `REDIS_DB` | Redis DB 번호 | `0` |
 | `REDIS_PASSWORD` | Redis 비밀번호 | — |
+| `API_KEYS` | `tenant:key` 쉼표 구분 (미설정 시 인증 비활성화) | — |
+| `RATE_LIMIT_PER_MINUTE` | tenant별 분당 최대 요청 수 | `100` |
 
 ---
 
@@ -589,6 +613,7 @@ curl "http://localhost:8000/api/rag/graph/screen/my_collection/%EA%B9%83%ED%97%8
 | 11단계 | 모니터링 / 관찰가능성 (structlog JSON 로그, Prometheus 메트릭, `/health` 강화) | ✅ 완료 |
 | 12단계 | Grafana 대시보드 연동 (Prometheus + Grafana 컨테이너, RAG 전용 대시보드) | ✅ 완료 |
 | 13단계 | API 보안 강화 (X-API-Key 인증, Redis Rate Limiting, /health 공개 유지) | ✅ 완료 |
+| 14단계 | 멀티테넌트 collection 자동 격리 (tenant:key API_KEYS, request.state.tenant prefix 주입) | ✅ 완료 |
 
 ## 향후 개선 계획
 
