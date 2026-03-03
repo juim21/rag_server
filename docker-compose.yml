@@ -75,6 +75,8 @@ services:
         condition: service_started
     volumes:
       - ./app:/testcase-doc-rag/app
+      - ./tests:/testcase-doc-rag/tests:ro
+      - ./pytest.ini:/testcase-doc-rag/pytest.ini:ro
     networks:
       - backend_network
     restart: unless-stopped

@@ -1,0 +1,21 @@
+name: Sync → pagopago-crm/rag_server (hyunbin_dev)
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  sync:
+    name: Push to pagopago-crm hyunbin_dev
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to pagopago-crm/rag_server@hyunbin_dev
+        env:
+          PAGOPAGO_TOKEN: ${{ secrets.PAGOPAGO_TOKEN }}
+        run: |
+          git remote add pagopago https://x-access-token:${PAGOPAGO_TOKEN}@github.com/pagopago-crm/rag_server.git
+          git push pagopago main:hyunbin_dev --force

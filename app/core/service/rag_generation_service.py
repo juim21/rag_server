@@ -24,6 +24,7 @@ from app.infra.monitoring.metrics import (
 logger = structlog.get_logger()
 
 _CACHE_TTL = 3600  # 1시간
+_EMBED_BATCH_SIZE = 20  # Google AI API 배치 크기
 
 
 def _make_search_key(collection_name: str, query: str, k: int,
@@ -266,13 +267,27 @@ class RagGenerationService:
         await self.cache_client.set(cache_key, json.dumps(result), _CACHE_TTL)
         return result
 
+    def _embed_in_batches(self, texts: list) -> list:
+        """대량 텍스트를 배치로 나누어 임베딩 처리.
+        Google AI API 호출당 _EMBED_BATCH_SIZE개씩 분할하여 API 제한 회피."""
+        all_embeddings = []
+        for i in range(0, len(texts), _EMBED_BATCH_SIZE):
+            batch = texts[i:i + _EMBED_BATCH_SIZE]
+            embedding_requests.inc()
+            all_embeddings.extend(
+                self.embedding_client.embeddings.embed_documents(batch)
+            )
+        logger.info("embed_batches_done",
+                    total=len(texts),
+                    batches=max(1, (len(texts) + _EMBED_BATCH_SIZE - 1) // _EMBED_BATCH_SIZE))
+        return all_embeddings
+
     def _insert_to_collection(self, collection_name: str, documents: List[Document]):
         logger.info("insert_to_collection_start", collection_name=collection_name,
                     doc_count=len(documents))
 
         texts = [doc.page_content for doc in documents]
-        embedding_requests.inc()
-        embeddings = self.embedding_client.embeddings.embed_documents(texts)
+        embeddings = self._embed_in_batches(texts)
 
         docs_with_embeddings = [
             {
