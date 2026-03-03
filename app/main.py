@@ -48,11 +48,14 @@ def setup_dependencies():
     from app.infra.external.llm.google_client import GoogleChatClient
     from app.infra.external.rerank.cross_encoder_client import CrossEncoderClient
     from app.infra.external.cache.redis_cache_client import RedisCacheClient, NullCacheClient
+    from app.core.interface.multimodal_embedding_client import MultimodalEmbeddingClient
+    from app.infra.external.embedding.clip_embedding_client import ClipEmbeddingClient
     from app.di_container import DIContainer
 
     DIContainer.register(RagRepository, AgeRepositoryImpl())
     DIContainer.register(LlmClient, GoogleChatClient())
     DIContainer.register(RerankClient, CrossEncoderClient())
+    DIContainer.register(MultimodalEmbeddingClient, ClipEmbeddingClient())
 
     redis_host = os.getenv("REDIS_HOST")
     if redis_host:

@@ -19,6 +19,9 @@ google-generativeai==0.7.2
 # 재랭킹 (크로스인코더 모델, 9단계)
 sentence-transformers>=3.0.0
 
+# 멀티모달 임베딩 (19단계)
+Pillow>=10.0.0
+
 # Redis 캐싱 (10단계)
 redis[asyncio]>=5.0.0
 

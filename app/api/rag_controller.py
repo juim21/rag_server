@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
 from typing import Optional
@@ -70,6 +71,29 @@ async def search_rag(request: Request, body: RAGSearchRequest) -> JSONResponse:
         search_mode=body.search_mode,
         rerank=body.rerank
     )
+    return JSONResponse(content={
+        "results": [
+            {
+                "content": doc["page_content"],
+                "metadata": doc["metadata"],
+                "score": round(score, 4)
+            }
+            for doc, score in results
+        ]
+    })
+
+
+@router.post("/search/image", dependencies=_secured)
+async def search_by_image(request: Request) -> JSONResponse:
+    """이미지 파일을 업로드하면 CLIP 임베딩으로 시각적으로 유사한 문서를 검색합니다."""
+    ragGenService = DIContainer.get(RagGenerationService)
+    formData = await request.form()
+    collection_name = _prefixed_collection(request, formData.get("collection_name"))
+    k = int(formData.get("k", 5))
+    image_file = formData.get("image")
+    base64_image = base64.b64encode(image_file.file.read()).decode("utf-8")
+
+    results = await ragGenService.search_by_image(collection_name, base64_image, k)
     return JSONResponse(content={
         "results": [
             {

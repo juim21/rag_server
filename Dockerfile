@@ -10,6 +10,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # CrossEncoder 재랭킹 모델 사전 다운로드 (첫 요청 지연 방지, ~280MB)
 RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('BAAI/bge-reranker-base')"
 
+# CLIP 멀티모달 임베딩 모델 사전 다운로드 (~600MB)
+# 주의: CLIP ~600MB × --workers 5 = ~3GB. 운영 환경 메모리 확인 필요.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('clip-ViT-B-32')"
+
 # 앱 코드 복사
 COPY ./app /testcase/app
 

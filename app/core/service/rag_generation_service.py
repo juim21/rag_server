@@ -13,6 +13,7 @@ from app.di_container import DIContainer
 from app.core.interface import RagRepository
 from app.core.interface.llm_client import LlmClient
 from app.core.interface.cache_client import CacheClient
+from app.core.interface.multimodal_embedding_client import MultimodalEmbeddingClient
 from app.core.service.data_extractor import ImageExtractor
 from app.config.prompt import app_analysis_prompt_user, app_analysis_prompt_system
 from app.infra.monitoring.metrics import (
@@ -46,6 +47,7 @@ class RagGenerationService:
         self.rerank_client = DIContainer.get(RerankClient)
         self.cache_client: CacheClient = DIContainer.get(CacheClient)
         self.embedding_client = GoogleEmbeddingClient()
+        self.clip_client: MultimodalEmbeddingClient = DIContainer.get(MultimodalEmbeddingClient)
 
     # 대량의 데이터를 업로드 하는 방식 - 특정 디렉토리에 파일을 일괄로 저장 및 파일별 입력 데이터를 일괄로 업로드
     async def generation_rag(self, collection_name: str):
@@ -102,7 +104,8 @@ class RagGenerationService:
         tasks = [self._call_llm_with_image(item) for item in data_items]
         results_raw = await asyncio.gather(*tasks, return_exceptions=True)
         result = []
-        for r in results_raw:
+        base64_images_filtered = []
+        for i, r in enumerate(results_raw):
             if isinstance(r, Exception):
                 error_type = type(r).__name__
                 if "OpenAI" in error_type or "API" in str(r):
@@ -115,9 +118,11 @@ class RagGenerationService:
                     logger.error("add_rag_data_error", error_type=error_type, error=str(r)[:100])
             else:
                 result.append(r)
+                base64_images_filtered.append(data_items[i]["image"])
 
         application_docuement_list = self.imageExtractor.create_column_document(result)
-        await asyncio.to_thread(self._insert_to_collection, collection_name, application_docuement_list)
+        await asyncio.to_thread(self._insert_to_collection, collection_name,
+                                application_docuement_list, base64_images_filtered)
         await self.cache_client.delete_pattern(f"rag:search:{collection_name}:*")
 
     # 기존에 있는 컬렉션에 텍스트 데이터 임베딩 (멀티파트 텍스트)
@@ -173,17 +178,25 @@ class RagGenerationService:
 
         # 재랭킹 사용 시 충분한 후보를 오버패치
         fetch_k = k * 3 if rerank else k
-        embedding_requests.inc()
-        query_embedding = await asyncio.to_thread(
-            self.embedding_client.embeddings.embed_query, query
-        )
 
-        with search_latency.labels(search_mode=search_mode).time():
-            results = await asyncio.to_thread(
-                self.vector_repository.similarity_search,
-                collection_name, query_embedding, fetch_k, filters,
-                search_mode, query if search_mode == "hybrid" else None
+        if search_mode == "visual":
+            clip_emb = await asyncio.to_thread(self.clip_client.embed_text, query)
+            with search_latency.labels(search_mode=search_mode).time():
+                results = await asyncio.to_thread(
+                    self.vector_repository.similarity_search,
+                    collection_name, None, fetch_k, filters, "visual", None, clip_emb
+                )
+        else:
+            embedding_requests.inc()
+            query_embedding = await asyncio.to_thread(
+                self.embedding_client.embeddings.embed_query, query
             )
+            with search_latency.labels(search_mode=search_mode).time():
+                results = await asyncio.to_thread(
+                    self.vector_repository.similarity_search,
+                    collection_name, query_embedding, fetch_k, filters,
+                    search_mode, query if search_mode == "hybrid" else None
+                )
 
         logger.info("search_rag", collection_name=collection_name, query=query,
                     k=k, search_mode=search_mode, rerank=rerank, result_count=len(results))
@@ -267,6 +280,20 @@ class RagGenerationService:
         await self.cache_client.set(cache_key, json.dumps(result), _CACHE_TTL)
         return result
 
+    async def search_by_image(self, collection_name: str, base64_image: str,
+                               k: int = 5, filters: dict = None) -> list:
+        """이미지 파일을 CLIP 인코더로 임베딩하여 시각적으로 유사한 문서를 검색합니다."""
+        clip_emb = await asyncio.to_thread(
+            self.clip_client.embed_image_base64, base64_image
+        )
+        results = await asyncio.to_thread(
+            self.vector_repository.similarity_search,
+            collection_name, None, k, filters, "visual", None, clip_emb
+        )
+        logger.info("search_by_image", collection_name=collection_name, k=k,
+                    result_count=len(results))
+        return results
+
     def _embed_in_batches(self, texts: list) -> list:
         """대량 텍스트를 배치로 나누어 임베딩 처리.
         Google AI API 호출당 _EMBED_BATCH_SIZE개씩 분할하여 API 제한 회피."""
@@ -282,21 +309,25 @@ class RagGenerationService:
                     batches=max(1, (len(texts) + _EMBED_BATCH_SIZE - 1) // _EMBED_BATCH_SIZE))
         return all_embeddings
 
-    def _insert_to_collection(self, collection_name: str, documents: List[Document]):
+    def _insert_to_collection(self, collection_name: str, documents: List[Document],
+                              base64_images: list = None):
         logger.info("insert_to_collection_start", collection_name=collection_name,
                     doc_count=len(documents))
 
         texts = [doc.page_content for doc in documents]
         embeddings = self._embed_in_batches(texts)
 
-        docs_with_embeddings = [
-            {
+        docs_with_embeddings = []
+        for i, (doc, emb) in enumerate(zip(documents, embeddings)):
+            image_emb = None
+            if base64_images and i < len(base64_images) and base64_images[i] and self.clip_client:
+                image_emb = self.clip_client.embed_image_base64(base64_images[i])
+            docs_with_embeddings.append({
                 "page_content": doc.page_content,
                 "embedding": emb,
                 "metadata": doc.metadata,
-            }
-            for doc, emb in zip(documents, embeddings)
-        ]
+                "image_embedding": image_emb,
+            })
 
         exists = self.vector_repository.collection_exists(collection_name)
         logger.info("insert_to_collection", collection_name=collection_name,

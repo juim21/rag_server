@@ -77,16 +77,39 @@ class PGVectorManager:
                 CREATE INDEX IF NOT EXISTS rag_embeddings_embedding_hnsw_idx
                 ON rag_embeddings USING hnsw (embedding halfvec_cosine_ops);
             """)
+            # 19단계: CLIP 이미지 임베딩 컬럼 추가 (512차원, NULL 허용)
+            cursor.execute("""
+                ALTER TABLE rag_embeddings
+                ADD COLUMN IF NOT EXISTS image_embedding vector(512);
+            """)
+            # 부분 인덱스: image_embedding이 있는 행만 인덱싱하여 공간 절약
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS rag_embeddings_image_emb_hnsw_idx
+                ON rag_embeddings USING hnsw (image_embedding vector_cosine_ops)
+                WHERE image_embedding IS NOT NULL;
+            """)
 
-    def insert_embedding(self, collection_name: str, content: str, metadata: dict, embedding: list):
-        """pgvector 테이블에 임베딩과 콘텐츠를 삽입합니다. content_tsv도 자동 생성합니다."""
+    def insert_embedding(self, collection_name: str, content: str, metadata: dict, embedding: list,
+                         image_embedding: list = None):
+        """pgvector 테이블에 임베딩과 콘텐츠를 삽입합니다. content_tsv도 자동 생성합니다.
+        image_embedding: CLIP 이미지 임베딩(512차원). None이면 NULL 저장.
+        """
         import json
         with self.get_cursor() as cursor:
-            cursor.execute(
-                """INSERT INTO rag_embeddings (collection_name, content, metadata, embedding, content_tsv)
-                   VALUES (%s, %s, %s, %s::halfvec, to_tsvector('simple', %s))""",
-                (collection_name, content, json.dumps(metadata), embedding, content)
-            )
+            if image_embedding is not None:
+                cursor.execute(
+                    """INSERT INTO rag_embeddings
+                       (collection_name, content, metadata, embedding, content_tsv, image_embedding)
+                       VALUES (%s, %s, %s, %s::halfvec, to_tsvector('simple', %s), %s::vector)""",
+                    (collection_name, content, json.dumps(metadata), embedding, content, image_embedding)
+                )
+            else:
+                cursor.execute(
+                    """INSERT INTO rag_embeddings
+                       (collection_name, content, metadata, embedding, content_tsv, image_embedding)
+                       VALUES (%s, %s, %s, %s::halfvec, to_tsvector('simple', %s), NULL)""",
+                    (collection_name, content, json.dumps(metadata), embedding, content)
+                )
 
     def _build_filter_clause(self, filters: dict) -> tuple:
         """filters dict를 WHERE 절 조건과 파라미터 리스트로 변환합니다."""
@@ -98,11 +121,42 @@ class PGVectorManager:
             params.append(json.dumps(filters))
         return conditions, params
 
-    def search_similar(self, collection_name: str, query_embedding: list, k: int = 5,
-                       filters: dict = None, search_mode: str = "vector", query_text: str = None) -> list:
-        """벡터 유사도 검색 또는 하이브리드 검색(RRF)을 수행합니다.
-        search_mode: 'vector' (기본) | 'hybrid' (벡터 + BM25 키워드, RRF 결합)
+    def _visual_search(self, collection_name: str, query_image_embedding: list, k: int, filters: dict) -> list:
+        """CLIP image_embedding 컬럼에 대한 코사인 유사도 검색.
+        image_embedding이 NULL인 행은 제외합니다.
         """
+        import json
+        filter_conditions, filter_params = self._build_filter_clause(filters)
+        conditions = ["collection_name = %s", "image_embedding IS NOT NULL"] + filter_conditions
+        where_clause = " AND ".join(conditions)
+        params = [query_image_embedding, collection_name] + filter_params + [query_image_embedding, k]
+
+        sql = f"""
+            SELECT content, metadata, 1 - (image_embedding <=> %s::vector) AS score
+            FROM rag_embeddings
+            WHERE {where_clause}
+            ORDER BY image_embedding <=> %s::vector
+            LIMIT %s
+        """
+        with self.get_cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+        return [
+            {"content": row[0],
+             "metadata": row[1] if isinstance(row[1], dict) else json.loads(row[1]),
+             "score": float(row[2])}
+            for row in rows
+        ]
+
+    def search_similar(self, collection_name: str, query_embedding: list, k: int = 5,
+                       filters: dict = None, search_mode: str = "vector", query_text: str = None,
+                       image_embedding: list = None) -> list:
+        """벡터 유사도 검색 또는 하이브리드/비주얼 검색을 수행합니다.
+        search_mode: 'vector' (기본) | 'hybrid' (벡터+BM25 RRF) | 'visual' (CLIP 이미지 임베딩)
+        image_embedding: visual 모드에서 사용할 CLIP 벡터(512차원)
+        """
+        if search_mode == "visual" and image_embedding is not None:
+            return self._visual_search(collection_name, image_embedding, k, filters)
         if search_mode == "hybrid" and query_text:
             return self._hybrid_search(collection_name, query_embedding, query_text, k, filters)
         return self._vector_search(collection_name, query_embedding, k, filters)

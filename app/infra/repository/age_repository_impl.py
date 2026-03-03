@@ -97,16 +97,21 @@ class AgeRepositoryImpl(RagRepository):
                 collection_name=collection_name,
                 content=content,
                 metadata=metadata,
-                embedding=embedding
+                embedding=embedding,
+                image_embedding=doc.get("image_embedding")  # None이면 NULL 저장
             )
 
     def similarity_search(self, collection_name: str, query_embedding: List[float], k: int = 5,
-                          filters: dict = None, search_mode: str = "vector", query_text: str = None) -> List[Tuple[Dict[str, Any], float]]:
+                          filters: dict = None, search_mode: str = "vector", query_text: str = None,
+                          image_embedding: list = None) -> List[Tuple[Dict[str, Any], float]]:
         """
-        pgvector 코사인 유사도 검색 또는 하이브리드 검색(RRF)을 수행합니다.
+        pgvector 코사인 유사도 검색 또는 하이브리드/비주얼 검색을 수행합니다.
         search_mode='hybrid' + query_text 전달 시 벡터+BM25 RRF 결합 결과를 반환합니다.
+        search_mode='visual' + image_embedding 전달 시 CLIP 이미지 임베딩 검색을 수행합니다.
         """
-        rows = self.connection_manager.search_similar(collection_name, query_embedding, k, filters, search_mode, query_text)
+        rows = self.connection_manager.search_similar(
+            collection_name, query_embedding, k, filters, search_mode, query_text, image_embedding
+        )
         return [
             ({"page_content": row["content"], "metadata": row["metadata"]}, row["score"])
             for row in rows

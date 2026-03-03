@@ -29,7 +29,8 @@ FastAPI (rag_controller)
   │       │
   │       ├─► ImageExtractor            (이미지 → base64 변환, Document 생성)
   │       ├─► GoogleChatClient          (Gemini 2.5 Flash Vision 이미지 분석)
-  │       ├─► GoogleEmbeddingClient     (gemini-embedding-001 임베딩)
+  │       ├─► GoogleEmbeddingClient     (gemini-embedding-001 임베딩, 3072차원)
+  │       ├─► ClipEmbeddingClient       (clip-ViT-B-32 멀티모달 임베딩, 512차원)
   │       └─► RagRepository            (Apache AGE 저장/검색)
   │               │
   │               └─► PGVectorManager  (PostgreSQL 연결풀, psycopg3)
@@ -57,7 +58,7 @@ FastAPI (rag_controller)
 | Backend | FastAPI 0.115, Python 3.11, Uvicorn |
 | Graph DB | PostgreSQL + Apache AGE 1.6.0 (Cypher 쿼리) |
 | Vector | PostgreSQL + pgvector 0.8.1 (임베딩 저장) |
-| AI/ML | Google Gemini 2.5 Flash (Vision), gemini-embedding-001 |
+| AI/ML | Google Gemini 2.5 Flash (Vision), gemini-embedding-001, CLIP (clip-ViT-B-32) |
 | Framework | LangChain 0.2 |
 | ORM | SQLAlchemy 2.0, psycopg3 |
 | Cache | Redis 7 (redis[asyncio]) |
@@ -219,7 +220,7 @@ Content-Type: application/json
 | `collection_name` | string | 필수 | 검색할 컬렉션명 |
 | `query` | string | 필수 | 검색 쿼리 |
 | `k` | int | 5 | 반환할 결과 수 |
-| `search_mode` | string | `"vector"` | `"vector"` (순수 벡터) \| `"hybrid"` (벡터+BM25 RRF) |
+| `search_mode` | string | `"vector"` | `"vector"` (순수 벡터) \| `"hybrid"` (벡터+BM25 RRF) \| `"visual"` (CLIP 텍스트→이미지 검색) |
 | `filters` | object | null | JSONB 메타데이터 필터 (예: `{"service_name": "서비스명"}`) |
 | `rerank` | bool | `false` | `true`: 크로스인코더 재랭킹 적용 (k×3 오버패치 후 재정렬) |
 
@@ -239,6 +240,51 @@ Content-Type: application/json
     ]
 }
 ```
+
+---
+
+### POST `/api/rag/search/image`
+
+이미지 파일을 업로드하면 **CLIP 이미지 인코더**로 임베딩하여 시각적으로 유사한 화면 문서를 검색합니다.
+텍스트 설명 없이 이미지 자체의 시각 정보만으로 검색합니다.
+
+```http
+POST /api/rag/search/image
+Content-Type: multipart/form-data
+
+collection_name: my_collection
+k:               5
+image:           (이미지 파일)
+```
+
+| 파라미터 | 타입 | 기본값 | 설명 |
+|----------|------|--------|------|
+| `collection_name` | string | 필수 | 검색할 컬렉션명 |
+| `k` | int | `5` | 반환할 결과 수 |
+| `image` | file | 필수 | 검색 기준 이미지 파일 (jpg/png/webp) |
+
+```bash
+curl -X POST http://localhost:8000/api/rag/search/image \
+  -H "X-API-Key: your-key" \
+  -F "collection_name=my_collection" \
+  -F "k=3" \
+  -F "image=@screenshot.png"
+```
+
+**응답 예시**
+```json
+{
+    "results": [
+        {
+            "content": "로그인 화면 분석 텍스트...",
+            "metadata": {"service_name": "인증 서비스", "screen_name": "로그인"},
+            "score": 0.8741
+        }
+    ]
+}
+```
+
+> **동작 원리**: 업로드된 이미지를 `clip-ViT-B-32`로 512차원 벡터로 인코딩 → `rag_embeddings.image_embedding` 컬럼에서 코사인 유사도 검색 → `image_embedding`이 NULL인 행(텍스트 전용)은 검색 제외
 
 ---
 
@@ -627,6 +673,7 @@ curl "http://localhost:8000/api/rag/graph/screen/my_collection/%EA%B9%83%ED%97%8
 | 16단계 | pytest 단위·통합 테스트 (보안 미들웨어 13개, API 엔드포인트 4개, DB/Redis mock) | ✅ 완료 |
 | 17단계 | 배치 임베딩 최적화 (20개 단위 배치 처리, API 호출 수 최소화, 메트릭 연동) | ✅ 완료 |
 | 18단계 | pagopago-crm 자동 동기화 (main push → pagopago-crm/rag_server:hyunbin_dev 자동 반영) | ✅ 완료 |
+| 19단계 | 멀티모달 CLIP 임베딩 (`clip-ViT-B-32`, 512차원) — `search_mode="visual"` + `POST /search/image` | ✅ 완료 |
 
 ---
 
@@ -639,7 +686,7 @@ curl "http://localhost:8000/api/rag/graph/screen/my_collection/%EA%B9%83%ED%97%8
 | Job | 도구 | 내용 |
 |-----|------|------|
 | **Lint** | flake8 | `app/` 전체 정적 분석 (max-line-length=120) |
-| **Unit Tests** | pytest | `tests/` 전체 실행 (17개 테스트) |
+| **Unit Tests** | pytest | `tests/` 전체 실행 (32개 테스트) |
 
 ### 테스트 구성
 
@@ -650,9 +697,13 @@ tests/
 │                        #   - _load_key_tenant_map (파싱, 공백, 혼용)
 │                        #   - verify_api_key (인증 비활성화, 401/403, tenant 주입)
 │                        #   - _prefixed_collection (tenant prefix 자동 적용)
-└── test_api.py          # API 통합 테스트 4개
-                         #   - /health: API 키 없이 200 반환
-                         #   - /search: 키 없으면 401, 잘못된 키 403, 인증 비활성화 통과
+├── test_api.py          # API 통합 테스트 4개
+│                        #   - /health: API 키 없이 200 반환
+│                        #   - /search: 키 없으면 401, 잘못된 키 403, 인증 비활성화 통과
+└── test_multimodal.py   # 19단계 멀티모달 단위 테스트 15개
+                         #   - ClipEmbeddingClient 인터페이스 준수 (4개)
+                         #   - pgvectorDB visual 검색 분기 / insert_embedding NULL 처리 (6개)
+                         #   - RagGenerationService visual 분기 / search_by_image (5개)
 ```
 
 ### pagopago-crm 자동 동기화
@@ -670,5 +721,5 @@ tests/
 
 ## 향후 개선 계획
 
-- 멀티모달 임베딩 적용 (이미지 직접 임베딩)
 - AGE 그래프 심화 탐색 (다단계 관계 순회, 서비스 간 의존성 분석)
+- 멀티모달 하이브리드 검색 (텍스트 임베딩 + CLIP 이미지 임베딩 RRF 결합)
