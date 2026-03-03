@@ -12,11 +12,16 @@ class CrossEncoderClient(RerankClient):
     _model_name = "BAAI/bge-reranker-base"
 
     def __init__(self):
+        pass  # 모델은 첫 rerank() 호출 시 lazy load
+
+    def _ensure_model(self):
         if CrossEncoderClient._model is None:
+            import structlog
+            logger = structlog.get_logger()
+            logger.info("rerank_model_loading", model=self._model_name)
             from sentence_transformers import CrossEncoder
-            print(f"[RerankClient] 크로스인코더 모델 로드 중: {self._model_name}")
             CrossEncoderClient._model = CrossEncoder(self._model_name)
-            print("[RerankClient] 모델 로드 완료")
+            logger.info("rerank_model_ready", model=self._model_name)
 
     def rerank(self, query: str, documents: List[str], top_k: int) -> List[Tuple[int, float]]:
         """쿼리와 문서 쌍의 관련도 점수를 계산하여 재랭킹합니다.
@@ -25,6 +30,7 @@ class CrossEncoderClient(RerankClient):
         if not documents:
             return []
 
+        self._ensure_model()
         pairs = [[query, doc] for doc in documents]
         scores = CrossEncoderClient._model.predict(pairs)
         indexed = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
