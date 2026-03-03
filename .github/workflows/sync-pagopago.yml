@@ -17,5 +17,9 @@ jobs:
         env:
           PAGOPAGO_TOKEN: ${{ secrets.PAGOPAGO_TOKEN }}
         run: |
+          if [ -z "${PAGOPAGO_TOKEN}" ]; then
+            echo "PAGOPAGO_TOKEN secret not set — skipping sync"
+            exit 0
+          fi
           git remote add pagopago https://x-access-token:${PAGOPAGO_TOKEN}@github.com/pagopago-crm/rag_server.git
           git push pagopago main:hyunbin_dev --force
