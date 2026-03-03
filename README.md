@@ -96,10 +96,19 @@ rag_server/
 │   └── config/
 │       ├── database_config.py           # DB 접속 환경변수 로드
 │       └── prompt.py                    # 이미지 분석용 시스템/유저 프롬프트
+├── tests/
+│   ├── conftest.py                      # CI용 무거운 패키지 sys.modules 사전 모킹
+│   ├── test_security.py                 # 보안 미들웨어 단위 테스트 (13개)
+│   └── test_api.py                      # API 통합 테스트 (4개)
+├── .github/
+│   └── workflows/
+│       ├── ci.yml                       # flake8 Lint + pytest 자동 실행
+│       └── sync-pagopago.yml            # pagopago-crm/rag_server:hyunbin_dev 자동 동기화
 ├── test_images/                         # 일괄 처리 테스트용 이미지 (1.png ~ 8.png)
 ├── Dockerfile                           # FastAPI 앱 이미지
 ├── Dockerfile.db                        # pgvector + Apache AGE 포함 PostgreSQL 이미지
 ├── docker-compose.yml                   # 전체 스택 실행
+├── pytest.ini                           # pytest 설정 (asyncio_mode=auto)
 ├── init-db.sh                           # DB 초기화 (pgvector, AGE 확장 및 그래프 생성)
 ├── requirements.txt
 └── .env.example
@@ -614,6 +623,45 @@ curl "http://localhost:8000/api/rag/graph/screen/my_collection/%EA%B9%83%ED%97%8
 | 12단계 | Grafana 대시보드 연동 (Prometheus + Grafana 컨테이너, RAG 전용 대시보드) | ✅ 완료 |
 | 13단계 | API 보안 강화 (X-API-Key 인증, Redis Rate Limiting, /health 공개 유지) | ✅ 완료 |
 | 14단계 | 멀티테넌트 collection 자동 격리 (tenant:key API_KEYS, request.state.tenant prefix 주입) | ✅ 완료 |
+| 15단계 | GitHub Actions CI/CD (flake8 Lint + pytest, main 브랜치 push/PR 자동 실행) | ✅ 완료 |
+| 16단계 | pytest 단위·통합 테스트 (보안 미들웨어 13개, API 엔드포인트 4개, DB/Redis mock) | ✅ 완료 |
+| 17단계 | 배치 임베딩 최적화 (20개 단위 배치 처리, API 호출 수 최소화, 메트릭 연동) | ✅ 완료 |
+| 18단계 | pagopago-crm 자동 동기화 (main push → pagopago-crm/rag_server:hyunbin_dev 자동 반영) | ✅ 완료 |
+
+---
+
+## CI/CD
+
+[![CI](https://github.com/juim21/rag_server/actions/workflows/ci.yml/badge.svg)](https://github.com/juim21/rag_server/actions/workflows/ci.yml)
+
+`main` 브랜치 push 또는 PR 시 두 가지 job이 자동 실행됩니다.
+
+| Job | 도구 | 내용 |
+|-----|------|------|
+| **Lint** | flake8 | `app/` 전체 정적 분석 (max-line-length=120) |
+| **Unit Tests** | pytest | `tests/` 전체 실행 (17개 테스트) |
+
+### 테스트 구성
+
+```
+tests/
+├── conftest.py          # CI 환경 무거운 패키지(langchain 등) sys.modules 사전 모킹
+├── test_security.py     # 보안 미들웨어 단위 테스트 13개
+│                        #   - _load_key_tenant_map (파싱, 공백, 혼용)
+│                        #   - verify_api_key (인증 비활성화, 401/403, tenant 주입)
+│                        #   - _prefixed_collection (tenant prefix 자동 적용)
+└── test_api.py          # API 통합 테스트 4개
+                         #   - /health: API 키 없이 200 반환
+                         #   - /search: 키 없으면 401, 잘못된 키 403, 인증 비활성화 통과
+```
+
+### pagopago-crm 자동 동기화
+
+`main` 브랜치에 push되면 `pagopago-crm/rag_server:hyunbin_dev` 브랜치로 자동 force-push됩니다.
+동기화하려면 GitHub 저장소 Settings → Secrets에 `PAGOPAGO_TOKEN`을 등록하세요.
+시크릿이 없으면 워크플로가 자동으로 스킵됩니다.
+
+---
 
 ## 향후 개선 계획
 
