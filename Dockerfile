@@ -7,6 +7,9 @@ WORKDIR /testcase-doc-rag
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# CrossEncoder 재랭킹 모델 사전 다운로드 (첫 요청 지연 방지, ~280MB)
+RUN python -c "from sentence_transformers import CrossEncoder; CrossEncoder('BAAI/bge-reranker-base')"
+
 # 앱 코드 복사
 COPY ./app /testcase/app
 
