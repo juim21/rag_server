@@ -54,6 +54,9 @@ class AgeRepositoryImpl(RagRepository):
         구조: (Screen:collection_name)-[:BELONGS_TO]->(Service)
         AGE 파라미터 바인딩($param)으로 따옴표/특수문자 안전 처리.
         """
+        # AGE 레이블에는 콜론(:) 등 특수문자 불가 → 언더스코어로 치환
+        age_label = collection_name.replace(":", "__")
+
         for doc in documents:
             content = doc.get("page_content", "")
             embedding = doc.get("embedding", [])
@@ -74,10 +77,10 @@ class AgeRepositoryImpl(RagRepository):
             })
 
             # 2. AGE: Screen 노드 CREATE + BELONGS_TO 관계 생성
-            # collection_name은 노드 레이블이므로 백틱으로 감싸서 직접 삽입
+            # age_label은 콜론 제거된 안전한 레이블명, 백틱으로 감싸서 직접 삽입
             screen_query = f"""
             MATCH (s:Service {{name: $service_name, version: $version}})
-            CREATE (n:`{collection_name}` {{
+            CREATE (n:`{age_label}` {{
                 content: $content,
                 metadata: $metadata_str,
                 screen_name: $screen_name
@@ -163,8 +166,9 @@ class AgeRepositoryImpl(RagRepository):
         AGE 그래프에서 같은 서비스에 속한 연관 화면 노드를 조회합니다.
         지정한 screen_name의 화면과 동일 서비스의 다른 화면들을 반환합니다.
         """
+        age_label = collection_name.replace(":", "__")
         query = f"""
-        MATCH (target:`{collection_name}` {{screen_name: $screen_name}})-[:BELONGS_TO]->(s:Service)
+        MATCH (target:`{age_label}` {{screen_name: $screen_name}})-[:BELONGS_TO]->(s:Service)
         MATCH (other)-[:BELONGS_TO]->(s)
         WHERE id(other) <> id(target)
         RETURN other

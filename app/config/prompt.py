@@ -65,7 +65,8 @@ app_analysis_prompt_user = """
                 1. 요청한 JSON 형식으로 응답해주세요
                 2. 요청결과는 반드시 유효한 JSON으로 응답하고 다른 텍스트는 포함하지마세요.
                 3. 특히 all_visible_text 필드에는 화면에서 읽을 수 있는 모든 텍스트를 빠짐없이 포함해주세요.
-                4. input_metadata 부분은 사용자가 입력한 데이터로 입력받은 그대로 출력해주세요(이부분 변경금지)
+                4. input_metadata의 service_name, version, access_level은 입력값 그대로 출력하세요.
+                5. input_metadata의 screen_name이 비어 있거나 "auto"인 경우, 이미지를 분석하여 이 화면을 가장 잘 설명하는 이름을 한국어로 직접 생성하세요. (예: "로그인 화면", "상품 목록 페이지", "주문 상세 조회")
 
             """
 

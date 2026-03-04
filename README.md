@@ -119,9 +119,11 @@ rag_server/
 
 ## API 엔드포인트
 
-### 인증 방식
+### 공통 스펙
 
-`API_KEYS` 설정 시 모든 엔드포인트(GET `/health` 제외)에 `X-API-Key` 헤더가 필요합니다.
+**Base URL**: `http://{host}:8000`
+
+**인증**: `API_KEYS` 설정 시 모든 엔드포인트(GET `/health` 제외)에 `X-API-Key` 헤더가 필요합니다.
 
 ```http
 X-API-Key: {발급된 API 키}
@@ -133,11 +135,19 @@ X-API-Key: {발급된 API 키}
 | `403` | 잘못된 키 |
 | `429` | Rate Limit 초과 (분당 `RATE_LIMIT_PER_MINUTE`회) |
 
-> **멀티테넌트 자동 격리**: `API_KEYS`를 `tenant:key` 형식으로 설정하면, 서버가 저장·검색 시 `collection_name` 앞에 tenant prefix를 자동으로 붙입니다. 클라이언트는 prefix 없이 `collection_name`만 전달하면 됩니다.
->
-> 예) `API_KEYS=system01:key-aaa,system02:key-bbb`
-> system01이 `"screens"` 저장 → 내부 저장 키: `"system01:screens"`
-> system02가 `"screens"` 저장 → 내부 저장 키: `"system02:screens"` (완전 분리)
+**시스템 구분 (`system_id`)**: 하나의 RAG 서버를 여러 시스템이 공유할 때, 요청 body 또는 form-data에 `system_id`를 전달하면 자동으로 컬렉션을 격리합니다.
+
+```jsonc
+// system_id 지정 시: 내부적으로 "{system_id}:{collection_name}" 으로 저장·검색
+{ "collection_name": "screens", "system_id": "system01", ... }
+// → 실제 접근 컬렉션: "system01:screens"
+
+// system_id 미지정 시: collection_name 그대로 사용
+{ "collection_name": "screens", ... }
+// → 실제 접근 컬렉션: "screens"
+```
+
+> `API_KEYS` 형식: 쉼표 구분 단순 key 목록 (`key1,key2,...`)
 
 ---
 
@@ -148,9 +158,11 @@ X-API-Key: {발급된 API 키}
 ```http
 POST /api/rag/generation/vector
 Content-Type: application/json
+X-API-Key: {key}
 
 {
-    "collection_name": "my_collection"
+    "collection_name": "my_collection",
+    "system_id": "system01"
 }
 ```
 
@@ -169,7 +181,9 @@ Content-Type: application/json
 ```http
 POST /api/rag/add/vector
 Content-Type: multipart/form-data
+X-API-Key: {key}
 
+system_id:       시스템 구분자 (선택, 예: system01)
 collection_name: my_collection
 service_name:    서비스명 (배열, 이미지 수만큼)
 screen_name:     화면명  (배열)
@@ -187,7 +201,9 @@ images:          이미지 파일 (배열)
 ```http
 POST /api/rag/add/text
 Content-Type: multipart/form-data
+X-API-Key: {key}
 
+system_id:       시스템 구분자 (선택, 예: system01)
 collection_name: my_collection
 service_name:    서비스명 (배열)
 screen_name:     화면명  (배열)
@@ -205,9 +221,11 @@ text_content:    화면 설명 텍스트 (배열)
 ```http
 POST /api/rag/search
 Content-Type: application/json
+X-API-Key: {key}
 
 {
     "collection_name": "my_collection",
+    "system_id": "system01",
     "query": "검색 버튼이 있는 랭킹 목록 화면",
     "k": 5,
     "search_mode": "vector",
@@ -218,6 +236,7 @@ Content-Type: application/json
 | 파라미터 | 타입 | 기본값 | 설명 |
 |----------|------|--------|------|
 | `collection_name` | string | 필수 | 검색할 컬렉션명 |
+| `system_id` | string | null | 시스템 구분자 (예: `"system01"`) — 지정 시 해당 시스템 컬렉션만 검색 |
 | `query` | string | 필수 | 검색 쿼리 |
 | `k` | int | 5 | 반환할 결과 수 |
 | `search_mode` | string | `"vector"` | `"vector"` (순수 벡터) \| `"hybrid"` (벡터+BM25 RRF) \| `"visual"` (CLIP 텍스트→이미지 검색) |
@@ -251,7 +270,9 @@ Content-Type: application/json
 ```http
 POST /api/rag/search/image
 Content-Type: multipart/form-data
+X-API-Key: {key}
 
+system_id:       시스템 구분자 (선택, 예: system01)
 collection_name: my_collection
 k:               5
 image:           (이미지 파일)
@@ -260,12 +281,14 @@ image:           (이미지 파일)
 | 파라미터 | 타입 | 기본값 | 설명 |
 |----------|------|--------|------|
 | `collection_name` | string | 필수 | 검색할 컬렉션명 |
+| `system_id` | string | null | 시스템 구분자 (선택) |
 | `k` | int | `5` | 반환할 결과 수 |
 | `image` | file | 필수 | 검색 기준 이미지 파일 (jpg/png/webp) |
 
 ```bash
 curl -X POST http://localhost:8000/api/rag/search/image \
   -H "X-API-Key: your-key" \
+  -F "system_id=system01" \
   -F "collection_name=my_collection" \
   -F "k=3" \
   -F "image=@screenshot.png"
@@ -295,9 +318,11 @@ curl -X POST http://localhost:8000/api/rag/search/image \
 ```http
 POST /api/rag/analyze/code
 Content-Type: application/json
+X-API-Key: {key}
 
 {
     "collection_name": "my_collection",
+    "system_id": "system01",
     "code": "def authenticate_user(username, password):\n    ...",
     "k": 5,
     "filters": {"service_name": "인증 서비스"}
@@ -356,6 +381,7 @@ AGE 그래프에서 지정한 화면과 같은 서비스에 속한 연관 화면
 
 ```http
 GET /api/rag/graph/screen/my_collection/깃허브%20전체%20랭킹목록%20페이지/related
+GET /api/rag/graph/screen/my_collection/깃허브%20전체%20랭킹목록%20페이지/related?system_id=system01
 ```
 
 **응답 예시**
@@ -480,8 +506,8 @@ cp .env.example .env
 | `REDIS_PORT` | Redis 포트 | `6379` |
 | `REDIS_DB` | Redis DB 번호 | `0` |
 | `REDIS_PASSWORD` | Redis 비밀번호 | — |
-| `API_KEYS` | `tenant:key` 쉼표 구분 (미설정 시 인증 비활성화) | — |
-| `RATE_LIMIT_PER_MINUTE` | tenant별 분당 최대 요청 수 | `100` |
+| `API_KEYS` | 허용 key 쉼표 구분 (미설정 시 인증 비활성화, 예: `key1,key2`) | — |
+| `RATE_LIMIT_PER_MINUTE` | key별 분당 최대 요청 수 | `100` |
 
 ---
 
@@ -668,7 +694,7 @@ curl "http://localhost:8000/api/rag/graph/screen/my_collection/%EA%B9%83%ED%97%8
 | 11단계 | 모니터링 / 관찰가능성 (structlog JSON 로그, Prometheus 메트릭, `/health` 강화) | ✅ 완료 |
 | 12단계 | Grafana 대시보드 연동 (Prometheus + Grafana 컨테이너, RAG 전용 대시보드) | ✅ 완료 |
 | 13단계 | API 보안 강화 (X-API-Key 인증, Redis Rate Limiting, /health 공개 유지) | ✅ 완료 |
-| 14단계 | 멀티테넌트 collection 자동 격리 (tenant:key API_KEYS, request.state.tenant prefix 주입) | ✅ 완료 |
+| 14단계 | 멀티시스템 collection 격리 (요청 body `system_id` 필드 기반, API_KEYS 단순 key 목록) | ✅ 완료 |
 | 15단계 | GitHub Actions CI/CD (flake8 Lint + pytest, main 브랜치 push/PR 자동 실행) | ✅ 완료 |
 | 16단계 | pytest 단위·통합 테스트 (보안 미들웨어 13개, API 엔드포인트 4개, DB/Redis mock) | ✅ 완료 |
 | 17단계 | 배치 임베딩 최적화 (20개 단위 배치 처리, API 호출 수 최소화, 메트릭 연동) | ✅ 완료 |
@@ -694,9 +720,9 @@ curl "http://localhost:8000/api/rag/graph/screen/my_collection/%EA%B9%83%ED%97%8
 tests/
 ├── conftest.py          # CI 환경 무거운 패키지(langchain 등) sys.modules 사전 모킹
 ├── test_security.py     # 보안 미들웨어 단위 테스트 13개
-│                        #   - _load_key_tenant_map (파싱, 공백, 혼용)
-│                        #   - verify_api_key (인증 비활성화, 401/403, tenant 주입)
-│                        #   - _prefixed_collection (tenant prefix 자동 적용)
+│                        #   - _load_api_keys (파싱, 공백, 빈 항목 무시)
+│                        #   - verify_api_key (인증 비활성화, 401/403, key 반환)
+│                        #   - _prefixed_collection (system_id prefix 자동 적용)
 ├── test_api.py          # API 통합 테스트 4개
 │                        #   - /health: API 키 없이 200 반환
 │                        #   - /search: 키 없으면 401, 잘못된 키 403, 인증 비활성화 통과

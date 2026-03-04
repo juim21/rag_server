@@ -90,6 +90,10 @@ class RagGenerationService:
         access_levels = formData.getlist("access_level")
         images = formData.getlist("images")
 
+        # screen_name 미전달 시 이미지 수만큼 빈 문자열로 패딩 → 프롬프트에서 AI가 자동 추론
+        while len(screen_names) < len(images):
+            screen_names.append("")
+
         data_items = []
         for i in range(len(service_names)):
             data_items.append({

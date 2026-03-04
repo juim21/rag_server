@@ -17,15 +17,14 @@ router = APIRouter()
 _secured = [Depends(verify_api_key), Depends(rate_limit)]
 
 
-def _prefixed_collection(request: Request, collection_name: str) -> str:
+def _prefixed_collection(collection_name: str, system_id: str = None) -> str:
     """
-    request.state.tenant 기반으로 collection_name에 자동 prefix를 붙입니다.
-    tenant가 없거나 'default'이면 원본 collection_name 그대로 반환.
-    예) tenant='system01', collection_name='screens' → 'system01:screens'
+    system_id 기반으로 collection_name에 자동 prefix를 붙입니다.
+    system_id가 없거나 'default'이면 원본 collection_name 그대로 반환.
+    예) system_id='system01', collection_name='screens' → 'system01:screens'
     """
-    tenant = getattr(request.state, "tenant", None)
-    if tenant and tenant != "default":
-        return f"{tenant}:{collection_name}"
+    if system_id and system_id != "default":
+        return f"{system_id}:{collection_name}"
     return collection_name
 
 
@@ -33,7 +32,7 @@ def _prefixed_collection(request: Request, collection_name: str) -> str:
 async def generate_rag(request: Request, body: RAGRequest) -> JSONResponse:
     ragGenService = DIContainer.get(RagGenerationService)
     await ragGenService.generation_rag(
-        collection_name=_prefixed_collection(request, body.collection_name)
+        collection_name=_prefixed_collection(body.collection_name, body.system_id)
     )
     return JSONResponse(content={"result": "ok"})
 
@@ -43,7 +42,7 @@ async def add_rag(request: Request) -> JSONResponse:
     ragGenService = DIContainer.get(RagGenerationService)
     formData = await request.form()
     await ragGenService.add_rag_data(
-        collection_name=_prefixed_collection(request, formData.get("collection_name")),
+        collection_name=_prefixed_collection(formData.get("collection_name"), formData.get("system_id")),
         formData=formData
     )
     return JSONResponse(content={"result": "ok"})
@@ -54,7 +53,7 @@ async def add_rag_text(request: Request) -> JSONResponse:
     ragGenService = DIContainer.get(RagGenerationService)
     formData = await request.form()
     await ragGenService.add_rag_text_data(
-        collection_name=_prefixed_collection(request, formData.get("collection_name")),
+        collection_name=_prefixed_collection(formData.get("collection_name"), formData.get("system_id")),
         formData=formData
     )
     return JSONResponse(content={"result": "ok"})
@@ -64,7 +63,7 @@ async def add_rag_text(request: Request) -> JSONResponse:
 async def search_rag(request: Request, body: RAGSearchRequest) -> JSONResponse:
     ragGenService = DIContainer.get(RagGenerationService)
     results = await ragGenService.search_rag(
-        collection_name=_prefixed_collection(request, body.collection_name),
+        collection_name=_prefixed_collection(body.collection_name, body.system_id),
         query=body.query,
         k=body.k,
         filters=body.filters,
@@ -88,7 +87,7 @@ async def search_by_image(request: Request) -> JSONResponse:
     """이미지 파일을 업로드하면 CLIP 임베딩으로 시각적으로 유사한 문서를 검색합니다."""
     ragGenService = DIContainer.get(RagGenerationService)
     formData = await request.form()
-    collection_name = _prefixed_collection(request, formData.get("collection_name"))
+    collection_name = _prefixed_collection(formData.get("collection_name"), formData.get("system_id"))
     k = int(formData.get("k", 5))
     image_file = formData.get("image")
     base64_image = base64.b64encode(image_file.file.read()).decode("utf-8")
@@ -116,7 +115,7 @@ async def analyze_code(request: Request, body: RAGCodeAnalyzeRequest) -> JSONRes
     """
     ragGenService = DIContainer.get(RagGenerationService)
     result = await ragGenService.analyze_code_impact(
-        collection_name=_prefixed_collection(request, body.collection_name),
+        collection_name=_prefixed_collection(body.collection_name, body.system_id),
         code=body.code,
         k=body.k,
         filters=body.filters
@@ -150,15 +149,16 @@ async def get_screens_by_service(service_name: str, version: Optional[str] = Non
 
 
 @router.get("/graph/screen/{collection_name}/{screen_name}/related", response_model=GraphScreensResponse, dependencies=_secured)
-async def get_related_screens(request: Request, collection_name: str, screen_name: str) -> JSONResponse:
+async def get_related_screens(collection_name: str, screen_name: str, system_id: Optional[str] = None) -> JSONResponse:
     """
     AGE 그래프에서 같은 서비스에 속한 연관 화면을 조회합니다.
     - collection_name: 컬렉션(노드 레이블)명
     - screen_name: 기준 화면명
+    - system_id: (선택) 시스템 구분자
     """
     ragGenService = DIContainer.get(RagGenerationService)
     screens = await ragGenService.get_related_screens(
-        _prefixed_collection(request, collection_name),
+        _prefixed_collection(collection_name, system_id),
         screen_name
     )
     return JSONResponse(content={
