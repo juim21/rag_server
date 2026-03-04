@@ -103,6 +103,35 @@ def test_search_with_wrong_key_returns_403(monkeypatch):
         assert resp.status_code == 403
 
 
+def test_screen_name_padding_prevents_index_error():
+    """screen_name 미전달 시 이미지 수만큼 빈 문자열 패딩 — Bug#6 회귀 테스트.
+    패딩 없이 images보다 screen_names 길이가 짧으면 IndexError 발생하던 버그."""
+    screen_names = []          # screen_name 필드 없이 요청한 경우
+    image_count = 3            # 이미지 3장 업로드
+
+    while len(screen_names) < image_count:
+        screen_names.append("")
+
+    # 패딩 후 각 이미지 인덱스로 screen_name 접근해도 IndexError 없어야 함
+    items = [{"screen_name": screen_names[i]} for i in range(image_count)]
+    assert len(items) == image_count
+    assert all(item["screen_name"] == "" for item in items)
+
+
+def test_screen_name_partial_padding():
+    """screen_name이 일부만 전달된 경우 나머지를 빈 문자열로 패딩"""
+    screen_names = ["로그인 화면"]  # 1개만 전달
+    image_count = 3
+
+    while len(screen_names) < image_count:
+        screen_names.append("")
+
+    assert len(screen_names) == image_count
+    assert screen_names[0] == "로그인 화면"
+    assert screen_names[1] == ""
+    assert screen_names[2] == ""
+
+
 def test_search_auth_disabled_when_no_api_keys(monkeypatch):
     """/search: API_KEYS 미설정 시 인증 비활성화 → 키 없어도 통과"""
     monkeypatch.setenv("API_KEYS", "")

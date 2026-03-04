@@ -129,3 +129,37 @@ def test_prefixed_collection_different_system_ids():
     assert _prefixed_collection("screens", "system01") != _prefixed_collection("screens", "system02")
     assert _prefixed_collection("screens", "system01") == "system01:screens"
     assert _prefixed_collection("screens", "system02") == "system02:screens"
+
+
+# ── _age_safe_label ─────────────────────────────────────────────────────────
+
+def test_age_safe_label_colon_replaced():
+    """콜론(:)을 이중 언더스코어(__)로 치환 — Bug#5 회귀 테스트"""
+    from app.infra.repository.age_repository_impl import _age_safe_label
+    assert _age_safe_label("system01:screens") == "system01__screens"
+    assert ":" not in _age_safe_label("system01:screens")
+
+
+def test_age_safe_label_no_colon_unchanged():
+    """콜론 없는 컬렉션명은 그대로 반환"""
+    from app.infra.repository.age_repository_impl import _age_safe_label
+    assert _age_safe_label("screens") == "screens"
+
+
+def test_age_safe_label_multiple_colons():
+    """콜론이 여러 개여도 모두 치환"""
+    from app.infra.repository.age_repository_impl import _age_safe_label
+    result = _age_safe_label("a:b:c")
+    assert result == "a__b__c"
+    assert ":" not in result
+
+
+def test_age_safe_label_with_prefixed_collection():
+    """_prefixed_collection 결과를 AGE 레이블로 변환 시 콜론 없어야 함"""
+    from app.api.rag_controller import _prefixed_collection
+    from app.infra.repository.age_repository_impl import _age_safe_label
+    prefixed = _prefixed_collection("screens", "system01")
+    assert prefixed == "system01:screens"
+    age_label = _age_safe_label(prefixed)
+    assert age_label == "system01__screens"
+    assert ":" not in age_label
