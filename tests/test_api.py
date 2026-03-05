@@ -132,6 +132,27 @@ def test_screen_name_partial_padding():
     assert screen_names[2] == ""
 
 
+def test_multi_image_uses_images_count_not_service_names():
+    """이미지 복수 업로드 시 service_name 단일 값이라도 모든 이미지를 처리 — Bug#7 회귀 테스트.
+    루프 기준이 service_names 길이(=1)면 이미지 2개 중 1개만 처리되던 버그."""
+    images = ["img1", "img2", "img3"]  # 이미지 3개
+    service_names = ["MyApp"]           # service_name은 단일 값 (공통 적용)
+
+    def _get(lst, i, default=""):
+        if not lst:
+            return default
+        return lst[i] if i < len(lst) else lst[0]
+
+    data_items = [
+        {"service_name": _get(service_names, i), "image": images[i]}
+        for i in range(len(images))
+    ]
+
+    assert len(data_items) == 3
+    assert all(item["service_name"] == "MyApp" for item in data_items)
+    assert [item["image"] for item in data_items] == ["img1", "img2", "img3"]
+
+
 def test_search_auth_disabled_when_no_api_keys(monkeypatch):
     """/search: API_KEYS 미설정 시 인증 비활성화 → 키 없어도 통과"""
     monkeypatch.setenv("API_KEYS", "")

@@ -84,23 +84,31 @@ class RagGenerationService:
 
     # 기존에 있는 컬렉션에 데이터 임베딩 (멀티파트 이미지)
     async def add_rag_data(self, collection_name: str, formData: FormData):
+        images = formData.getlist("images")
+
+        # 공통 메타데이터: 단일 값이면 전체 이미지에 적용, 복수이면 인덱스 매핑
         service_names = formData.getlist("service_name")
         screen_names = formData.getlist("screen_name")
         versions = formData.getlist("version")
         access_levels = formData.getlist("access_level")
-        images = formData.getlist("images")
+
+        def _get(lst, i, default=""):
+            """단일 값이면 모든 이미지에 공통 적용, 복수이면 인덱스로 접근."""
+            if not lst:
+                return default
+            return lst[i] if i < len(lst) else lst[0]
 
         # screen_name 미전달 시 이미지 수만큼 빈 문자열로 패딩 → 프롬프트에서 AI가 자동 추론
         while len(screen_names) < len(images):
             screen_names.append("")
 
         data_items = []
-        for i in range(len(service_names)):
+        for i in range(len(images)):
             data_items.append({
-                "service_name": service_names[i],
-                "screen_name": screen_names[i],
-                "version": versions[i],
-                "access_level": access_levels[i],
+                "service_name": _get(service_names, i),
+                "screen_name": _get(screen_names, i),
+                "version": _get(versions, i, "1.0.0"),
+                "access_level": _get(access_levels, i),
                 "image": base64.b64encode(images[i].file.read()).decode("utf-8"),
                 "filename": images[i].filename
             })

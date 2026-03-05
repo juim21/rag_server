@@ -164,10 +164,49 @@ docker compose restart app
 
 ---
 
+---
+
+## Bug #7 — `rag_generation_service.py` : 이미지 복수 업로드 시 첫 번째만 처리
+
+**발생일:** 2026-03-06
+**파일:** `app/core/service/rag_generation_service.py`
+**위치:** `add_rag_data()` 메서드
+
+### 문제
+HTML 업로드 UI에서 이미지 2개를 동시에 업로드하면 1개만 저장됨.
+
+원인: `service_name`, `version`, `access_level`은 폼에서 **단일 값**으로 전송되나,
+루프를 `range(len(service_names))`로 순회하여 이미지 수와 무관하게 1회만 실행.
+
+```python
+# 버그 코드: service_names 길이(=1)만큼만 루프 → 이미지 2개 중 1개 누락
+for i in range(len(service_names)):
+    data_items.append({ ... "image": images[i] ... })
+```
+
+### 수정
+루프 기준을 `images` 길이로 변경. 단일 메타데이터 값(공통 적용)은 `_get()` 헬퍼로 처리.
+
+```python
+def _get(lst, i, default=""):
+    """단일 값이면 모든 이미지에 공통 적용, 복수이면 인덱스로 접근."""
+    if not lst:
+        return default
+    return lst[i] if i < len(lst) else lst[0]
+
+for i in range(len(images)):   # 이미지 수 기준으로 순회
+    data_items.append({
+        "service_name": _get(service_names, i),
+        ...
+    })
+```
+
+---
+
 ## 수정 파일 요약 (전체)
 
 | 파일 | 수정 내용 |
 |---|---|
 | `app/core/interface/llm_client.py` | `chat_llm` 추상 메서드 제거 (NameError 방지) |
 | `app/infra/repository/age_repository_impl.py` | `collection_exists` 방어 코드, `_execute_cypher` 롤백 수정, `age_label` sanitize (Bug#5) |
-| `app/core/service/rag_generation_service.py` | `_insert_to_collection` AGE 전환, `screen_name` 미전달 시 패딩(Bug#5 연관) |
+| `app/core/service/rag_generation_service.py` | `_insert_to_collection` AGE 전환, `screen_name` 패딩(Bug#6), 다중 이미지 루프 기준 수정(Bug#7) |
