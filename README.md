@@ -68,6 +68,151 @@ FastAPI (rag_controller)
 
 ---
 
+## 기술적 핵심 성과
+
+### 1. 이중 저장 구조 — 그래프 + 벡터의 역할 분리
+
+단순한 벡터 DB가 아닌 **Apache AGE 그래프 + pgvector 테이블** 이중 구조를 설계했습니다.
+
+```
+AGE Graph (biz_rag_graph)            pgvector (rag_embeddings)
+────────────────────────────         ────────────────────────────────────
+(Screen:screens)                     id | collection_name | content
+    ─[:BELONGS_TO]─►                 ─────────────────────────────────────
+(Service {name, version})            1  | screens          | "랭킹 목록..."
+                                     2  | screens          | "로그인 화면..."
+                                         embedding(halfvec 3072) | image_embedding(512)
+```
+
+- **AGE 그래프**: 화면-서비스 간 `BELONGS_TO` 관계를 Cypher로 질의
+- **pgvector 테이블**: 코사인 유사도 검색 전용 임베딩 저장
+- 두 저장소가 `collection_name`으로 연계되어 그래프 탐색 + 벡터 검색을 조합 가능
+
+---
+
+### 2. 3가지 검색 모드 + 크로스인코더 재랭킹
+
+검색 품질을 단계적으로 높이는 파이프라인을 구축했습니다.
+
+| 모드 | 방식 | 적합한 상황 |
+|------|------|------------|
+| `vector` | gemini-embedding-001 (3072차원) 코사인 유사도 | 의미 기반 검색 |
+| `hybrid` | 벡터 + BM25 tsvector **RRF 결합** | 키워드+의미 혼합 |
+| `visual` | CLIP (clip-ViT-B-32, 512차원) 이미지 임베딩 | 이미지 자체 시각 특징 검색 |
+
+`rerank=true` 추가 시 → **BAAI/bge-reranker-base 크로스인코더**로 최종 재정렬:
+
+```
+바이인코더 검색 (빠름, k×3 오버패치)
+    ↓
+크로스인코더 재랭킹 (정밀, 쿼리-문서 쌍 함께 인코딩)
+    ↓
+top-k 반환
+```
+
+---
+
+### 3. halfvec(3072) + HNSW 인덱스 — 메모리 50% 절약, O(log n) 검색
+
+pgvector의 `vector(3072)`는 float32로 저장되고 hnsw/ivfflat 인덱스 상한이 2000차원입니다.
+`halfvec(3072)` (float16)로 전환하여 두 문제를 동시에 해결했습니다.
+
+```sql
+-- halfvec: float16, 최대 16000차원까지 HNSW 지원
+ALTER TABLE rag_embeddings ALTER COLUMN embedding TYPE halfvec(3072);
+
+CREATE INDEX rag_embeddings_emb_hnsw_idx
+    ON rag_embeddings USING hnsw (embedding halfvec_cosine_ops);
+
+-- CLIP 이미지 임베딩: NULL 제외 부분 인덱스
+CREATE INDEX rag_embeddings_image_emb_hnsw_idx
+    ON rag_embeddings USING hnsw (image_embedding vector_cosine_ops)
+    WHERE image_embedding IS NOT NULL;
+```
+
+- 메모리: 3072차원 × float16 → float32 대비 **50% 절약**
+- 검색: 순차 스캔 O(n) → HNSW **O(log n) 근사 최근접 이웃**
+
+---
+
+### 4. 비동기 병렬 LLM 호출 + 배치 임베딩
+
+이미지 수만큼 LLM을 순차 호출하면 대기 시간이 누적됩니다. `asyncio.gather()`로 동시 실행합니다.
+
+```python
+# 이미지 N개 → LLM N번 병렬 호출
+tasks = [self._call_llm_with_image(item) for item in data_items]
+results = await asyncio.gather(*tasks, return_exceptions=True)
+
+# DB/임베딩(동기) → 이벤트 루프 블로킹 없이 스레드 풀 위임
+await asyncio.to_thread(self._insert_to_collection, ...)
+
+# Google API 배치 임베딩: 20개씩 묶어 API 호출 최소화
+for i in range(0, len(texts), _EMBED_BATCH_SIZE):  # _EMBED_BATCH_SIZE = 20
+    batch = texts[i:i + 20]
+    all_embeddings.extend(self.embedding_client.embed_documents(batch))
+```
+
+---
+
+### 5. Redis 캐싱 + 슬라이딩 윈도우 Rate Limiting
+
+프로덕션 운영을 위한 두 가지 Redis 활용 패턴을 구현했습니다.
+
+**캐싱** — 동일 검색 쿼리의 중복 임베딩·검색 비용 제거:
+```
+검색 요청 → Redis GET (cache key: rag:search:{collection}:{md5})
+    ├─ HIT  → 즉시 반환 (LLM/임베딩 호출 0)
+    └─ MISS → 검색 실행 → Redis SET (TTL 1시간) → 반환
+데이터 저장 완료 시 → rag:search:{collection}:* 자동 무효화
+```
+
+**Rate Limiting** — Redis INCR + EXPIRE 슬라이딩 윈도우:
+```python
+key = f"rl:{api_key[:16]}:{int(time.time()) // 60}"  # 분 단위 키
+count = await redis.incr(key)
+if count == 1:
+    await redis.expire(key, 60)
+if count > RATE_LIMIT_PER_MINUTE:
+    raise HTTPException(429)
+```
+
+`REDIS_HOST` 미설정 시 `NullCacheClient`로 자동 fallback — **환경 구분 없이 동일 코드**로 동작.
+
+---
+
+### 6. 멀티시스템 격리 + X-API-Key 인증
+
+하나의 RAG 서버를 여러 시스템이 공유할 수 있는 격리 구조입니다.
+
+```
+요청: { collection_name: "screens", system_id: "system01" }
+    ↓ _prefixed_collection()
+실제 컬렉션: "system01:screens"
+    ↓ _age_safe_label()        ← Bug#5: ":" → "__" 치환 (AGE 레이블 제약)
+AGE 레이블:  "system01__screens"
+pgvector:   collection_name = "system01:screens"  (원본 유지)
+```
+
+인증은 `X-API-Key` 헤더 기반, `API_KEYS` 미설정 시 개발 모드로 자동 비활성화.
+
+---
+
+### 7. CI/CD + 24개 자동화 테스트
+
+```
+main push/PR
+    ├─ flake8 Lint (app/ 전체, max-line-length=120)
+    └─ pytest 24개 테스트
+            ├─ 보안 미들웨어: _load_api_keys, verify_api_key, rate_limit (13개)
+            ├─ API 통합: /health, /search 인증 시나리오 (7개)
+            └─ 회귀: AGE 레이블 콜론 치환, screen_name 패딩, 복수 이미지 루프 (4개)
+
+main push 성공 시 → pagopago-crm/rag_server:hyunbin_dev 자동 동기화
+```
+
+---
+
 ## 프로젝트 구조
 
 ```
